@@ -1,0 +1,14 @@
+archived_exports/*
+.env
+__pycache__/
+*.pyc
+.claude/*
+data/*
+local_views/*
+
+# Pytest and testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+tests/fixtures/*.zip

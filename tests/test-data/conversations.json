@@ -1,0 +1,168 @@
+[
+    {
+        "uuid": "191fc6fc-0ef5-4e3a-8cc8-1db0cdc7cd0f",
+        "name": "",
+        "summary": "",
+        "created_at": "2025-10-18T04:06:56.628672Z",
+        "updated_at": "2025-10-18T04:58:28.886997Z",
+        "account":
+        {
+            "uuid": "f0f1e818-2d8a-403e-917b-085326c0d358"
+        },
+        "chat_messages":
+        [
+            {
+                "uuid": "91f83650-edf2-4145-9046-adee7d84fa73",
+                "text": "",
+                "content":
+                [
+                    {
+                        "start_timestamp": "2025-10-18T04:06:57.751482Z",
+                        "stop_timestamp": "2025-10-18T04:06:57.751482Z",
+                        "flags": null,
+                        "type": "text",
+                        "text": "",
+                        "citations":
+                        []
+                    }
+                ],
+                "sender": "human",
+                "created_at": "2025-10-18T04:06:57.751482Z",
+                "updated_at": "2025-10-18T04:58:28.886997Z",
+                "attachments":
+                [],
+                "files":
+                []
+            },
+            {
+                "uuid": "c4dd4589-a13b-4b90-8c9a-40a3264ac288",
+                "text": "",
+                "content":
+                [
+                    {
+                        "start_timestamp": "2025-10-18T04:07:06.902378Z",
+                        "stop_timestamp": "2025-10-18T04:07:06.902378Z",
+                        "flags": null,
+                        "type": "text",
+                        "text": "",
+                        "citations":
+                        []
+                    }
+                ],
+                "sender": "assistant",
+                "created_at": "2025-10-18T04:07:06.902378Z",
+                "updated_at": "2025-10-18T04:58:28.886997Z",
+                "attachments":
+                [],
+                "files":
+                []
+            }
+        ]
+    },
+    {
+        "uuid": "fb6a10c9-b9cf-42e9-91ef-7ff06aecc4ef",
+        "name": "Python list comprehension help",
+        "summary": "**Conversation Overview**\n\nThe user asked for help understanding Python list comprehensions and how to filter a list of numbers. Claude explained the syntax and provided examples of basic list comprehensions, including filtering even numbers from a list. The user then asked for clarification on how to apply multiple conditions, and Claude demonstrated using multiple if conditions in a list comprehension with a practical example.",
+        "created_at": "2025-10-19T16:25:58.470265Z",
+        "updated_at": "2025-10-19T16:26:12.531250Z",
+        "account":
+        {
+            "uuid": "f0f1e818-2d8a-403e-917b-085326c0d358"
+        },
+        "chat_messages":
+        [
+            {
+                "uuid": "af1132c0-8477-4297-93dd-5fd1622d5c3c",
+                "text": "How do I use list comprehensions in Python to filter a list of numbers?",
+                "content":
+                [
+                    {
+                        "start_timestamp": "2025-10-19T16:25:59.498297Z",
+                        "stop_timestamp": "2025-10-19T16:25:59.498297Z",
+                        "flags": null,
+                        "type": "text",
+                        "text": "How do I use list comprehensions in Python to filter a list of numbers?",
+                        "citations":
+                        []
+                    }
+                ],
+                "sender": "human",
+                "created_at": "2025-10-19T16:25:59.502430Z",
+                "updated_at": "2025-10-19T16:25:59.502430Z",
+                "attachments":
+                [],
+                "files":
+                []
+            },
+            {
+                "uuid": "9a257773-861a-4168-9069-6f788e53ad08",
+                "text": "List comprehensions in Python provide a concise way to create lists and filter data. Here's the basic syntax:\n\n```python\n[expression for item in iterable if condition]\n```\n\nFor example, to filter even numbers from a list:\n\n```python\nnumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\neven_numbers = [x for x in numbers if x % 2 == 0]\nprint(even_numbers)  # Output: [2, 4, 6, 8, 10]\n```\n\nYou can also apply transformations:\n\n```python\nsquared_evens = [x**2 for x in numbers if x % 2 == 0]\nprint(squared_evens)  # Output: [4, 16, 36, 64, 100]\n```",
+                "content":
+                [
+                    {
+                        "start_timestamp": "2025-10-19T16:26:01.599456Z",
+                        "stop_timestamp": "2025-10-19T16:26:10.913285Z",
+                        "flags": null,
+                        "type": "text",
+                        "text": "List comprehensions in Python provide a concise way to create lists and filter data. Here's the basic syntax:\n\n```python\n[expression for item in iterable if condition]\n```\n\nFor example, to filter even numbers from a list:\n\n```python\nnumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\neven_numbers = [x for x in numbers if x % 2 == 0]\nprint(even_numbers)  # Output: [2, 4, 6, 8, 10]\n```\n\nYou can also apply transformations:\n\n```python\nsquared_evens = [x**2 for x in numbers if x % 2 == 0]\nprint(squared_evens)  # Output: [4, 16, 36, 64, 100]\n```",
+                        "citations":
+                        []
+                    }
+                ],
+                "sender": "assistant",
+                "created_at": "2025-10-19T16:26:12.531250Z",
+                "updated_at": "2025-10-19T16:26:12.531250Z",
+                "attachments":
+                [],
+                "files":
+                []
+            },
+            {
+                "uuid": "af1132c0-8477-4297-93dd-5fd4522d5c3c",
+                "text": "Can I use multiple conditions in the filter?",
+                "content":
+                [
+                    {
+                        "start_timestamp": "2025-10-19T16:25:59.498297Z",
+                        "stop_timestamp": "2025-10-19T16:25:59.498297Z",
+                        "flags": null,
+                        "type": "text",
+                        "text": "Can I use multiple conditions in the filter?",
+                        "citations":
+                        []
+                    }
+                ],
+                "sender": "human",
+                "created_at": "2025-10-19T16:25:59.502430Z",
+                "updated_at": "2025-10-19T16:25:59.502430Z",
+                "attachments":
+                [],
+                "files":
+                []
+            },
+            {
+                "uuid": "9a257773-861a-4168-9069-6f757e53ad08",
+                "text": "Yes, you can use multiple conditions with `and` or `or` operators:\n\n```python\nnumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]\n\n# Numbers that are even AND greater than 5\nfiltered = [x for x in numbers if x % 2 == 0 and x > 5]\nprint(filtered)  # Output: [6, 8, 10, 20]\n\n# Numbers divisible by 3 OR divisible by 5\nfiltered2 = [x for x in numbers if x % 3 == 0 or x % 5 == 0]\nprint(filtered2)  # Output: [3, 5, 6, 9, 10, 15, 20]\n```",
+                "content":
+                [
+                    {
+                        "start_timestamp": "2025-10-19T16:26:01.599456Z",
+                        "stop_timestamp": "2025-10-19T16:26:10.913285Z",
+                        "flags": null,
+                        "type": "text",
+                        "text": "Yes, you can use multiple conditions with `and` or `or` operators:\n\n```python\nnumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]\n\n# Numbers that are even AND greater than 5\nfiltered = [x for x in numbers if x % 2 == 0 and x > 5]\nprint(filtered)  # Output: [6, 8, 10, 20]\n\n# Numbers divisible by 3 OR divisible by 5\nfiltered2 = [x for x in numbers if x % 3 == 0 or x % 5 == 0]\nprint(filtered2)  # Output: [3, 5, 6, 9, 10, 15, 20]\n```",
+                        "citations":
+                        []
+                    }
+                ],
+                "sender": "assistant",
+                "created_at": "2025-10-19T16:26:12.531250Z",
+                "updated_at": "2025-10-19T16:26:12.531250Z",
+                "attachments":
+                [],
+                "files":
+                []
+            }
+        ]
+    }
+]

@@ -1,0 +1,2 @@
+# Test dependencies for integration tests
+pytest>=7.0.0
