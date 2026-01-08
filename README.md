@@ -82,6 +82,8 @@ The sync script includes multiple safety mechanisms:
 
 Then everything should just work!
 
+## Usage (if you set up based aliases)
+
 ```
 # Search
 cs "hi claude"
@@ -92,7 +94,7 @@ cs "hi claude"
 # export data.
 csv UUID
 
-# Directly open the top 3 results in your `$EDITOR`
+# Directly open the top 3 results for "books" in your `$EDITOR`
 cs books -o 3
 
 # JSON output
