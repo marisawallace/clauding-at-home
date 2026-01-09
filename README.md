@@ -10,7 +10,7 @@ I wanted full-text search for my [claude.ai](https://claude.ai/) chats, so I mad
 - **Hyperlinks in the results**: easy resume when you've found *that chat*
 - **JSON output** supported when searching
 - **Local view**: copy chats to Markdown or HTML, open in `$EDITOR`
-- **Non-destructive sync**: preserves a chat even if you deleted it on the website
+- **Non-destructive sync**: preserves a chat even if you deleted it on the website. Export/sync the last 30 days only and it'll preserve your older chats. 
 - **Export backup**: automatic archive of your data export zipfiles
 - **UUID tracking**: Correctly handles conversation renames
 - **Simple**: just a folder of python scripts. Works with system python.
