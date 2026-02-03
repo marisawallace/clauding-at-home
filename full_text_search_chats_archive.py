@@ -352,8 +352,8 @@ def print_json(results: List[SearchResult]):
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
-def open_in_editor(results: List[SearchResult], count: int):
-    """Open top N results in $EDITOR."""
+def open_in_editor(results: List[SearchResult], count: int, config: dict):
+    """Open top N results in $EDITOR as markdown files."""
     editor = os.environ.get("EDITOR", "vim")
 
     if count > len(results):
@@ -363,17 +363,65 @@ def open_in_editor(results: List[SearchResult], count: int):
         print("No results to open.")
         return
 
-    # Open files in editor
-    files_to_open = [str(result.filepath) for result in results[:count]]
-
-    print(f"Opening top {count} result(s) in {editor}...")
+    # Import view_conversation functions
+    script_dir = Path(__file__).parent.resolve()
+    sys.path.insert(0, str(script_dir))
     try:
-        subprocess.run([editor] + files_to_open)
+        from view_conversation import conversation_to_markdown, get_output_path
+    except ImportError as e:
+        print(f"Error: Could not import view_conversation: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Get local_views directory from config
+    local_views_dir = Path(config.get("LOCAL_VIEWS_DIR", script_dir / "local_views")).expanduser()
+    local_views_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate markdown files for each result
+    # Take the last N results (highest scoring) since print_results() reverses the list
+    markdown_files = []
+    for result in results[-count:][::-1]:
+        # Get output path for markdown file
+        md_path = get_output_path(local_views_dir, result.uuid, result.provider, "markdown")
+
+        # Check if markdown file already exists
+        if md_path.exists():
+            print(f"Using existing markdown: {md_path.name}")
+            markdown_files.append(str(md_path))
+            continue
+
+        # Load conversation data and convert to markdown
+        try:
+            with open(result.filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Convert to markdown
+            markdown_content = conversation_to_markdown(data)
+
+            # Write markdown file
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(markdown_content)
+
+            print(f"Generated markdown: {md_path.name}")
+            markdown_files.append(str(md_path))
+
+        except Exception as e:
+            print(f"Warning: Could not convert {result.filepath.name} to markdown: {e}", file=sys.stderr)
+            # Fall back to opening the original JSON file
+            markdown_files.append(str(result.filepath))
+
+    if not markdown_files:
+        print("No files to open.")
+        return
+
+    # Open markdown files in editor
+    print(f"Opening {len(markdown_files)} file(s) in {editor}...")
+    try:
+        subprocess.run([editor] + markdown_files)
     except FileNotFoundError:
-        print(f"Error: Editor '{editor}' not found. Set $EDITOR to your preferred editor.")
+        print(f"Error: Editor '{editor}' not found. Set $EDITOR to your preferred editor.", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"Error opening editor: {e}")
+        print(f"Error opening editor: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -441,7 +489,7 @@ Examples:
         if args.json:
             print("Warning: Cannot use -o/--open with -j/--json", file=sys.stderr)
         else:
-            open_in_editor(results, args.open)
+            open_in_editor(results, args.open, config)
 
 
 if __name__ == "__main__":
