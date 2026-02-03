@@ -57,6 +57,7 @@ class SearchResult:
     uuid: str
     name: str
     created_at: str
+    updated_at: str
     email: str
     provider: str  # "claude", "chatgpt", etc.
     filepath: Path
@@ -225,11 +226,21 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
     if name and query_lower in name.lower():
         total_score += 5
 
+    # Determine updated_at from last message (conversations) or top-level field
+    updated_at = data.get("updated_at", data["created_at"])
+    if item_type == "conversation":
+        messages = data.get("chat_messages", [])
+        if messages:
+            last_msg_date = messages[-1].get("created_at", "")
+            if last_msg_date:
+                updated_at = last_msg_date
+
     return SearchResult(
         type=item_type,
         uuid=data["uuid"],
         name=name if name else "(untitled)",
         created_at=data["created_at"],
+        updated_at=updated_at,
         email=email,
         provider=provider,
         filepath=filepath,
@@ -311,7 +322,7 @@ def print_results(results: List[SearchResult], query: str):
 
         print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
         print(f"{Colors.DIM}UUID: {result.uuid}{Colors.RESET}")
-        print(f"{Colors.DIM}Created: {result.created_at[:10]} | Account: {result.email}{Colors.RESET}")
+        print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
         print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
         print(f"{Colors.DIM}Score: {result.total_score:.1f} | Matches: {len(result.matches)}{Colors.RESET}")
 
@@ -341,6 +352,7 @@ def print_json(results: List[SearchResult]):
             "uuid": result.uuid,
             "name": result.name,
             "created_at": result.created_at,
+            "updated_at": result.updated_at,
             "email": result.email,
             "url": result.get_provider_url(),
             "filepath": str(result.filepath),
@@ -435,6 +447,7 @@ Examples:
   %(prog)s "machine learning"
   %(prog)s "python code" -j > results.json
   %(prog)s "API design" -o 3
+  %(prog)s "deployment" -t
         """
     )
 
@@ -447,6 +460,12 @@ Examples:
         "-j", "--json",
         action="store_true",
         help="Output results as JSON"
+    )
+
+    parser.add_argument(
+        "-t", "--time-sort",
+        action="store_true",
+        help="Sort results by updated date then score (most recent at bottom)"
     )
 
     parser.add_argument(
@@ -477,6 +496,10 @@ Examples:
 
     # Perform search
     results = search_archive(data_dir, args.query)
+
+    # Re-sort by updated date then score if requested (most recent at bottom)
+    if args.time_sort:
+        results.sort(key=lambda r: (r.updated_at, r.total_score), reverse=True)
 
     # Output results
     if args.json:
