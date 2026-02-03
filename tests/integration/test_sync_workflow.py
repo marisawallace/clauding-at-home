@@ -69,7 +69,7 @@ def test_fresh_claude_import(isolated_workspace, sample_claude_export, repo_root
     assert proj["docs"][0]["filename"] == "example.py"
 
     # Verify: Zip file was archived
-    archived_zip = isolated_workspace / "archived_exports/claude/data-2025-01-05.zip"
+    archived_zip = isolated_workspace / "archived_exports/claude/claude-test@example.com/data-2025-01-05.zip"
     assert archived_zip.exists(), "Zip file not archived"
 
 
@@ -222,7 +222,7 @@ def test_multiple_syncs_idempotent(isolated_workspace, sample_claude_export, rep
     for i in range(3):
         # Need to restore the zip file since it gets archived
         if i > 0:
-            archived = isolated_workspace / "archived_exports/claude/data-2025-01-05.zip"
+            archived = isolated_workspace / "archived_exports/claude/claude-test@example.com/data-2025-01-05.zip"
             shutil.copy(archived, zip_dest)
 
         result = subprocess.run(

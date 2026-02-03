@@ -336,9 +336,12 @@ class Provider(ABC):
         """Get user directory path."""
         return self.data_dir / self.get_provider_name() / email
 
-    def get_archived_exports_dir(self) -> Path:
-        """Get archived exports directory path."""
-        return self.archived_exports_base_dir / self.get_provider_name()
+    def get_archived_exports_dir(self, email: str = "") -> Path:
+        """Get archived exports directory path, optionally under an email subfolder."""
+        base = self.archived_exports_base_dir / self.get_provider_name()
+        if email:
+            return base / email
+        return base
 
 
 # ============================================================================
@@ -711,10 +714,11 @@ def process_items(items: List[Dict], items_dir: Path, item_type: str,
         print(f"  Saved: {filename}.json (UUID: {uuid})")
 
 
-def extract_and_organize(provider: Provider, zip_path: Path) -> None:
+def extract_and_organize(provider: Provider, zip_path: Path) -> str:
     """
     Extract and organize export using provider-specific methods.
     This function contains the common imperative orchestration logic.
+    Returns the user email extracted from the export.
     """
     print(f"Processing: {zip_path}")
 
@@ -768,6 +772,8 @@ def extract_and_organize(provider: Provider, zip_path: Path) -> None:
 
     print(f"\n✓ Successfully processed {zip_path.name}")
 
+    return email
+
 
 # ============================================================================
 # Main entry point
@@ -791,7 +797,7 @@ The script will:
   2. Extract conversations and projects organized by provider and email
   3. Update existing conversations (matched by UUID)
   4. Preserve locally archived chats deleted from the provider
-  5. Move processed zips to archived_exports/{provider}/
+  5. Move processed zips to archived_exports/{provider}/{email}/
 
 Configuration:
   Set ZIP_SEARCH_DIR in .env to customize where to search for export files.
@@ -860,16 +866,14 @@ Export your data:
 
     print(f"Found {len(zip_files)} zip file(s) to process\n")
 
-    # Create archived_exports directory if it doesn't exist
-    archived_exports_dir = provider.get_archived_exports_dir()
-    archived_exports_dir.mkdir(parents=True, exist_ok=True)
-
     # Process each zip file
     for zip_path in sorted(zip_files):
         try:
-            extract_and_organize(provider, zip_path)
+            email = extract_and_organize(provider, zip_path)
 
-            # Move the zip file to archived_exports/{provider}/
+            # Move the zip file to archived_exports/{provider}/{email}/
+            archived_exports_dir = provider.get_archived_exports_dir(email)
+            archived_exports_dir.mkdir(parents=True, exist_ok=True)
             archive_dest = archived_exports_dir / zip_path.name
             zip_path.rename(archive_dest)
             # Try to show relative path, fall back to absolute if not in same tree
