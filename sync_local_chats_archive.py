@@ -876,12 +876,7 @@ Export your data:
             archived_exports_dir.mkdir(parents=True, exist_ok=True)
             archive_dest = archived_exports_dir / zip_path.name
             zip_path.rename(archive_dest)
-            # Try to show relative path, fall back to absolute if not in same tree
-            try:
-                rel_path = archived_exports_dir.relative_to(script_dir)
-                print(f"Moved {zip_path.name} to {rel_path}/")
-            except ValueError:
-                print(f"Moved {zip_path.name} to {archived_exports_dir}/")
+            print(f"Moved {zip_path.name} to {archived_exports_dir}/")
             print()
         except Exception as e:
             print(f"\nERROR processing {zip_path.name}: {e}")
@@ -889,7 +884,7 @@ Export your data:
             traceback.print_exc()
             sys.exit(1)
 
-    print(f"All done! Archive location: {provider.data_dir}")
+    print(f"All done! Data location: {provider.get_user_dir(email)}")
 
 
 if __name__ == "__main__":
