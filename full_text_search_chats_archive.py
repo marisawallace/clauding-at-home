@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -117,6 +118,24 @@ def score_match(match_text: str, query: str) -> float:
         score += 5
 
     return score
+
+
+def recency_boost(updated_at: str) -> float:
+    """
+    Calculate a score boost based on how recently the conversation was updated.
+
+    Returns up to 5 points for conversations updated today, linearly decaying
+    to 0 for conversations last updated a year ago or longer.
+    """
+    try:
+        # Parse ISO 8601 timestamp (handle both Z and +00:00 suffixes)
+        ts = updated_at.replace("Z", "+00:00")
+        updated = datetime.fromisoformat(ts)
+        now = datetime.now(timezone.utc)
+        days_ago = (now - updated).total_seconds() / 86400
+        return max(0.0, 5.0 * (1.0 - days_ago / 365.0))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def extract_text_from_conversation(data: dict) -> List[str]:
@@ -249,7 +268,7 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
     )
 
 
-def search_archive(data_dir: Path, query: str) -> List[SearchResult]:
+def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True) -> List[SearchResult]:
     """
     Search all conversations and projects in the archive.
     """
@@ -287,6 +306,11 @@ def search_archive(data_dir: Path, query: str) -> List[SearchResult]:
                     result = search_item(proj_file, query, "project", email, provider)
                     if result:
                         results.append(result)
+
+    # Apply recency boost to scores
+    if apply_recency_boost:
+        for result in results:
+            result.total_score += recency_boost(result.updated_at)
 
     # The most relevant results should display at the bottom of the list, right
     # above the new terminal prompt.
@@ -448,6 +472,7 @@ Examples:
   %(prog)s "python code" -j > results.json
   %(prog)s "API design" -o 3
   %(prog)s "deployment" -t
+  %(prog)s "deployment" -R
         """
     )
 
@@ -460,6 +485,12 @@ Examples:
         "-j", "--json",
         action="store_true",
         help="Output results as JSON"
+    )
+
+    parser.add_argument(
+        "-R", "--no-recency",
+        action="store_true",
+        help="Disable recency boost (score based on text relevance only)"
     )
 
     parser.add_argument(
@@ -495,7 +526,7 @@ Examples:
     data_dir = Path(config.get("DATA_DIR", script_dir / "data")).expanduser()
 
     # Perform search
-    results = search_archive(data_dir, args.query)
+    results = search_archive(data_dir, args.query, apply_recency_boost=not args.no_recency)
 
     # Re-sort by updated date then score if requested (most recent at bottom)
     if args.time_sort:
