@@ -142,6 +142,21 @@ clauding-at-home/
 └── view_conversation.py            # View conversations as MD/HTML
 ```
 
+## Known Limitations
+
+### Conversation forks (Claude.ai)
+
+The official Claude.ai data export **does not fully preserve forked conversations**. Specifically:
+
+- **Human messages from all branches** are included in the export (as consecutive same-sender entries in `chat_messages`).
+- **Assistant responses from non-selected branches are missing.** Only the response from the branch you last had selected is exported.
+
+This means search results may not include text from assistant responses in branches you didn't select. There is no workaround within this tool since the data simply isn't present in the export.
+
+**Workarounds:**
+- Before exporting, revisit conversations with important forks and switch to each branch you care about (the export appears to capture whichever branch is active).
+
+
 ## Requirements
 
 - **Python**: 3.7 or higher
