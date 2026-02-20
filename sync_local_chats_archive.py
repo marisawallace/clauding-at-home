@@ -554,6 +554,10 @@ class ChatGPTProvider(Provider):
         """
         normalized = dict(conv)  # Make a copy
 
+        if not conv["id"]:
+            print("ERROR: missing ID in ChatGPT conversation")
+            sys.exit(1)
+
         # Map new field names to internal names
         normalized["uuid"] = conv["id"]
         normalized["name"] = conv["title"]
