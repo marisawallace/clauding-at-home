@@ -7,7 +7,16 @@ Robust automated integration tests for the claude-search project. These tests ex
 Install pytest if you haven't already:
 
 ```bash
-pip install pytest
+# Option 1: Virtual environment (works on all platforms)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements-test.txt
+
+# Option 2: System package manager
+# Debian/Ubuntu: sudo apt install python3-pytest
+# Fedora: sudo dnf install python3-pytest
+# Arch: sudo pacman -S python-pytest
+# macOS: brew install pytest
 ```
 
 ## Running Tests

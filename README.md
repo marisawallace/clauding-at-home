@@ -161,6 +161,36 @@ This means search results may not include text from assistant responses in branc
 
 - **Python**: 3.7 or higher
 - **Dependencies**: None (uses standard library only)
+
+## Testing
+
+To run the test suite:
+
+```bash
+# Option 1: Virtual environment (works on all platforms)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements-test.txt
+pytest
+
+# Option 2: System package manager
+# Debian/Ubuntu: sudo apt install python3-pytest
+# Fedora: sudo dnf install python3-pytest
+# Arch: sudo pacman -S python-pytest
+# macOS: brew install pytest
+
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run specific test file
+pytest tests/integration/test_sync_workflow.py
+```
+
+See [tests/README.md](tests/README.md) for detailed testing documentation, including test structure, fixtures, and debugging tips.
+
 ## Contributing
 
 This tool is designed to be extensible. To add support for a new provider:

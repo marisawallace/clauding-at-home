@@ -6,6 +6,13 @@ __pycache__/
 data/*
 local_views/*
 
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+virtualenv/
+
 # Pytest and testing
 .pytest_cache/
 .coverage
