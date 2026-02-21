@@ -47,8 +47,9 @@ def isolated_workspace(tmp_path, request):
 
     # Create standard directory structure
     (workspace / "data").mkdir()
-    (workspace / "archived_exports").mkdir()
-    (workspace / "local_views").mkdir()
+    (workspace / "data" / "llm_data").mkdir()
+    (workspace / "data" / "archived_exports").mkdir()
+    (workspace / "data" / "local_views").mkdir()
 
     # Log workspace location for manual inspection
     print("\n" + "="*80)
@@ -261,9 +262,9 @@ def test_env_file(repo_root, request):
     # Create test .env in repo root with paths pointing to workspace
     env_content = f"""# Test configuration
 ZIP_SEARCH_DIR={workspace}
-DATA_DIR={workspace / "data"}
-ARCHIVED_EXPORTS_DIR={workspace / "archived_exports"}
-LOCAL_VIEWS_DIR={workspace / "local_views"}
+DATA_DIR={workspace / "data" / "llm_data"}
+ARCHIVED_EXPORTS_DIR={workspace / "data" / "archived_exports"}
+LOCAL_VIEWS_DIR={workspace / "data" / "local_views"}
 """
     repo_env.write_text(env_content)
 
@@ -284,7 +285,7 @@ def prepopulated_archive(isolated_workspace):
     Returns the workspace path with existing data.
     """
     # Create existing conversation with known UUID
-    conv_dir = isolated_workspace / "data/claude/claude-test@example.com/conversations"
+    conv_dir = isolated_workspace / "data/llm_data/claude/claude-test@example.com/conversations"
     conv_dir.mkdir(parents=True)
 
     old_conversation = {

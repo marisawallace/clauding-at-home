@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 
+from paths import LLM_DATA_SUBDIR, ARCHIVED_EXPORTS_SUBDIR
+
 
 # ============================================================================
 # Shared utility functions
@@ -266,12 +268,12 @@ class Provider(ABC):
         if "DATA_DIR" in config:
             self.data_dir = Path(config["DATA_DIR"]).expanduser()
         else:
-            self.data_dir = script_dir / "data"
+            self.data_dir = script_dir / LLM_DATA_SUBDIR
         # Allow ARCHIVED_EXPORTS_DIR to be configured via .env
         if "ARCHIVED_EXPORTS_DIR" in config:
             self.archived_exports_base_dir = Path(config["ARCHIVED_EXPORTS_DIR"]).expanduser()
         else:
-            self.archived_exports_base_dir = script_dir / "archived_exports"
+            self.archived_exports_base_dir = script_dir / ARCHIVED_EXPORTS_SUBDIR
 
     @abstractmethod
     def get_provider_name(self) -> str:
@@ -801,7 +803,7 @@ The script will:
   2. Extract conversations and projects organized by provider and email
   3. Update existing conversations (matched by UUID)
   4. Preserve locally archived chats deleted from the provider
-  5. Move processed zips to archived_exports/{provider}/{email}/
+  5. Move processed zips to data/archived_exports/{provider}/{email}/
 
 Configuration:
   Set ZIP_SEARCH_DIR in .env to customize where to search for export files.

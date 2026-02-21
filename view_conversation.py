@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR
+
 
 def find_conversation_file(data_dir: Path, uuid: str) -> Optional[tuple[Path, str]]:
     """
@@ -392,8 +394,8 @@ Examples:
                     config[key.strip()] = value.strip()
 
     # Use configured directories or defaults
-    data_dir = Path(config.get("DATA_DIR", script_dir / "data")).expanduser()
-    local_views_dir = Path(config.get("LOCAL_VIEWS_DIR", script_dir / "local_views")).expanduser()
+    data_dir = Path(config.get("DATA_DIR", script_dir / LLM_DATA_SUBDIR)).expanduser()
+    local_views_dir = Path(config.get("LOCAL_VIEWS_DIR", script_dir / LOCAL_VIEWS_SUBDIR)).expanduser()
 
     # Create local_views directory if it doesn't exist
     local_views_dir.mkdir(parents=True, exist_ok=True)

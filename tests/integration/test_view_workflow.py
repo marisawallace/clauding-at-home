@@ -42,7 +42,7 @@ def test_view_markdown_format(isolated_workspace, sample_claude_export, repo_roo
     assert result.returncode == 0, f"View failed: {result.stderr}"
 
     # Verify: Markdown file was created
-    md_file = isolated_workspace / "local_views/claude/conv-uuid-001.md"
+    md_file = isolated_workspace / "data/local_views/claude/conv-uuid-001.md"
     assert md_file.exists(), "Markdown file not created"
 
     # Verify: Markdown content is correct
@@ -84,7 +84,7 @@ def test_view_html_format(isolated_workspace, sample_claude_export, repo_root, t
     assert result.returncode == 0, f"View failed: {result.stderr}"
 
     # Verify: HTML file was created
-    html_file = isolated_workspace / "local_views/claude/conv-uuid-002.html"
+    html_file = isolated_workspace / "data/local_views/claude/conv-uuid-002.html"
     assert html_file.exists(), "HTML file not created"
 
     # Verify: HTML content is correct
@@ -153,7 +153,7 @@ def test_view_caching(isolated_workspace, sample_claude_export, repo_root, test_
     assert result1.returncode == 0
 
     # Get file modification time
-    md_file = isolated_workspace / "local_views/claude/conv-uuid-001.md"
+    md_file = isolated_workspace / "data/local_views/claude/conv-uuid-001.md"
     first_mtime = md_file.stat().st_mtime
 
     # Execute: View same conversation again
@@ -201,7 +201,7 @@ def test_view_project(isolated_workspace, sample_claude_export, repo_root, test_
     assert result.returncode == 0, f"View project failed: {result.stderr}"
 
     # Verify: Markdown file created
-    md_file = isolated_workspace / "local_views/claude/proj-uuid-001.md"
+    md_file = isolated_workspace / "data/local_views/claude/proj-uuid-001.md"
     assert md_file.exists(), "Project markdown file not created"
 
     # Verify: Project content included

@@ -35,8 +35,8 @@ def test_fresh_claude_import(isolated_workspace, sample_claude_export, repo_root
     assert result.returncode == 0, f"Sync failed: {result.stderr}"
 
     # Verify: Directory structure created
-    conv_dir = isolated_workspace / "data/claude/claude-test@example.com/conversations"
-    proj_dir = isolated_workspace / "data/claude/claude-test@example.com/projects"
+    conv_dir = isolated_workspace / "data/llm_data/claude/claude-test@example.com/conversations"
+    proj_dir = isolated_workspace / "data/llm_data/claude/claude-test@example.com/projects"
     assert conv_dir.exists(), "Conversations directory not created"
     assert proj_dir.exists(), "Projects directory not created"
 
@@ -69,7 +69,7 @@ def test_fresh_claude_import(isolated_workspace, sample_claude_export, repo_root
     assert proj["docs"][0]["filename"] == "example.py"
 
     # Verify: Zip file was archived
-    archived_zip = isolated_workspace / "archived_exports/claude/claude-test@example.com/data-2025-01-05.zip"
+    archived_zip = isolated_workspace / "data/archived_exports/claude/claude-test@example.com/data-2025-01-05.zip"
     assert archived_zip.exists(), "Zip file not archived"
 
 
@@ -80,7 +80,7 @@ def test_conversation_update(prepopulated_archive, sample_claude_export, repo_ro
     workspace = prepopulated_archive
 
     # Verify old file exists
-    conv_dir = workspace / "data/claude/claude-test@example.com/conversations"
+    conv_dir = workspace / "data/llm_data/claude/claude-test@example.com/conversations"
     old_files = list(conv_dir.glob("*.json"))
     assert len(old_files) == 1, "Prepopulated archive should have 1 conversation"
 
@@ -146,7 +146,7 @@ def test_chatgpt_import(isolated_workspace, sample_chatgpt_export, test_env_file
     assert result.returncode == 0, f"Sync failed: {result.stderr}"
 
     # Verify: Directory structure created
-    conv_dir = isolated_workspace / "data/chatgpt/chatgpt-test@example.com/conversations"
+    conv_dir = isolated_workspace / "data/llm_data/chatgpt/chatgpt-test@example.com/conversations"
     assert conv_dir.exists(), "ChatGPT conversations directory not created"
 
     # Verify: Conversation imported
@@ -176,7 +176,7 @@ def test_filename_collision_handling(isolated_workspace, sample_claude_export, r
     assert result1.returncode == 0
 
     # Manually create a duplicate conversation with same date/name but different UUID
-    conv_dir = isolated_workspace / "data/claude/claude-test@example.com/conversations"
+    conv_dir = isolated_workspace / "data/llm_data/claude/claude-test@example.com/conversations"
     duplicate_conv = {
         "uuid": "conv-uuid-999",  # Different UUID
         "name": "Test Conversation 1",  # Same name
@@ -222,7 +222,7 @@ def test_multiple_syncs_idempotent(isolated_workspace, sample_claude_export, rep
     for i in range(3):
         # Need to restore the zip file since it gets archived
         if i > 0:
-            archived = isolated_workspace / "archived_exports/claude/claude-test@example.com/data-2025-01-05.zip"
+            archived = isolated_workspace / "data/archived_exports/claude/claude-test@example.com/data-2025-01-05.zip"
             shutil.copy(archived, zip_dest)
 
         result = subprocess.run(
@@ -234,8 +234,8 @@ def test_multiple_syncs_idempotent(isolated_workspace, sample_claude_export, rep
         assert result.returncode == 0, f"Sync {i+1} failed"
 
     # Verify: Still have exactly the right number of files
-    conv_dir = isolated_workspace / "data/claude/claude-test@example.com/conversations"
-    proj_dir = isolated_workspace / "data/claude/claude-test@example.com/projects"
+    conv_dir = isolated_workspace / "data/llm_data/claude/claude-test@example.com/conversations"
+    proj_dir = isolated_workspace / "data/llm_data/claude/claude-test@example.com/projects"
 
     conv_files = list(conv_dir.glob("*.json"))
     proj_files = list(proj_dir.glob("*.json"))

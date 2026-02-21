@@ -70,7 +70,7 @@ The sync script will:
 - Update existing conversations (matched by UUID)
 - Preserve locally archived chats that were deleted from the provider
 - Handle duplicate filenames with numeric suffixes
-- Move processed zip files to `archived_exports/{provider}/`
+- Move processed zip files to `data/archived_exports/{provider}/`
 
 The sync script includes multiple safety mechanisms:
 
@@ -112,31 +112,34 @@ cs books -j > results.json
 
 ```
 clauding-at-home/
-├── data/                           # Organized chat archives
-│   ├── claude/
-│   │   └── user@example.com/
-│   │       ├── conversations/
-│   │       │   └── YYYY-MM-DD_Title.json
-│   │       ├── projects/
-│   │       │   └── YYYY-MM-DD_Project.json
-│   │       └── user.json
-│   ├── chatgpt/
-│   │   └── user@example.com/
-│   │       ├── conversations/
-│   │       │   └── YYYY-MM-DD_Title.json
-│   │       └── user.json
-├── archived_exports/               # Processed export files
-│   ├── claude/
-│   │   └── data-YYYY-MM-DD-*.zip
-│   └── chatgpt/
-│       └── [hex]-YYYY-MM-DD-*.zip
-├── local_views/                    # Generated Markdown/HTML views
-│   ├── claude/
-│   │   ├── {uuid}.md
-│   │   └── {uuid}.html
-│   └── chatgpt/
-│       ├── {uuid}.md
-│       └── {uuid}.html
+├── data/                           # Sync this entire folder (e.g. with MEGA)
+│   ├── llm_data/                   # Organized chat archives
+│   │   ├── claude/
+│   │   │   └── user@example.com/
+│   │   │       ├── conversations/
+│   │   │       │   └── YYYY-MM-DD_Title.json
+│   │   │       ├── projects/
+│   │   │       │   └── YYYY-MM-DD_Project.json
+│   │   │       └── user.json
+│   │   └── chatgpt/
+│   │       └── user@example.com/
+│   │           ├── conversations/
+│   │           │   └── YYYY-MM-DD_Title.json
+│   │           └── user.json
+│   ├── archived_exports/           # Processed export zip files
+│   │   ├── claude/
+│   │   │   └── data-YYYY-MM-DD-*.zip
+│   │   └── chatgpt/
+│   │       └── [hex]-YYYY-MM-DD-*.zip
+│   └── local_views/                # Generated Markdown/HTML views
+│       ├── claude/
+│       │   ├── {uuid}.md
+│       │   └── {uuid}.html
+│       └── chatgpt/
+│           ├── {uuid}.md
+│           └── {uuid}.html
+├── migrations/                     # One-time data migration scripts
+│   └── 001_consolidate_data_dirs.py
 ├── sync_local_chats_archive.py     # Import and sync exports
 ├── full_text_search_chats_archive.py  # Search conversations
 └── view_conversation.py            # View conversations as MD/HTML

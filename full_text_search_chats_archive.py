@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional
 
+from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR
+
 
 # ANSI color codes
 class Colors:
@@ -409,7 +411,7 @@ def open_in_editor(results: List[SearchResult], count: int, config: dict):
         sys.exit(1)
 
     # Get local_views directory from config
-    local_views_dir = Path(config.get("LOCAL_VIEWS_DIR", script_dir / "local_views")).expanduser()
+    local_views_dir = Path(config.get("LOCAL_VIEWS_DIR", script_dir / LOCAL_VIEWS_SUBDIR)).expanduser()
     local_views_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate markdown files for each result
@@ -523,7 +525,7 @@ Examples:
                     config[key.strip()] = value.strip()
 
     # Use configured DATA_DIR or default
-    data_dir = Path(config.get("DATA_DIR", script_dir / "data")).expanduser()
+    data_dir = Path(config.get("DATA_DIR", script_dir / LLM_DATA_SUBDIR)).expanduser()
 
     # Perform search
     results = search_archive(data_dir, args.query, apply_recency_boost=not args.no_recency)
