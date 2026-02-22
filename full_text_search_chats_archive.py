@@ -186,7 +186,7 @@ def extract_text_from_project(data: dict) -> List[str]:
     return texts
 
 
-def search_item(filepath: Path, query: str, item_type: str, email: str, provider: str) -> Optional[SearchResult]:
+def search_item(filepath: Path, query: str, item_type: str, email: str, provider: str, exact: bool = False) -> Optional[SearchResult]:
     """
     Search a single conversation or project file.
 
@@ -216,25 +216,35 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
         text_lower = text.lower()
 
         # Check if query matches
-        if query_lower in text_lower:
+        query_words = query_lower.split()
+        if exact:
+            matches_text = query_lower in text_lower
+        else:
+            matches_text = all(word in text_lower for word in query_words)
+
+        if matches_text:
             score = score_match(text, query)
 
             # Extract context around matches (up to 200 chars)
-            # Find all occurrences
-            pattern = re.compile(re.escape(query_lower), re.IGNORECASE)
-            for match in pattern.finditer(text):
-                start = max(0, match.start() - 100)
-                end = min(len(text), match.end() + 100)
-                context = text[start:end]
+            if exact:
+                patterns = [re.compile(re.escape(query_lower), re.IGNORECASE)]
+            else:
+                patterns = [re.compile(re.escape(word), re.IGNORECASE) for word in query_words]
 
-                # Clean up context
-                context = context.replace("\n", " ").strip()
-                if start > 0:
-                    context = "..." + context
-                if end < len(text):
-                    context = context + "..."
+            for pattern in patterns:
+                for match in pattern.finditer(text):
+                    start = max(0, match.start() - 100)
+                    end = min(len(text), match.end() + 100)
+                    context = text[start:end]
 
-                matches.append(Match(text=context, score=score))
+                    # Clean up context
+                    context = context.replace("\n", " ").strip()
+                    if start > 0:
+                        context = "..." + context
+                    if end < len(text):
+                        context = context + "..."
+
+                    matches.append(Match(text=context, score=score))
 
     if not matches:
         return None
@@ -244,7 +254,12 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
 
     # Bonus score if match in name
     name = data.get("name", "")
-    if name and query_lower in name.lower():
+    name_lower = name.lower() if name else ""
+    if exact:
+        name_matches = query_lower in name_lower
+    else:
+        name_matches = all(w in name_lower for w in query_lower.split())
+    if name and name_matches:
         total_score += 5
 
     # Determine updated_at from last message (conversations) or top-level field
@@ -270,7 +285,7 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
     )
 
 
-def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True) -> List[SearchResult]:
+def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True, exact: bool = False) -> List[SearchResult]:
     """
     Search all conversations and projects in the archive.
     """
@@ -297,7 +312,7 @@ def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True)
             conversations_dir = user_dir / "conversations"
             if conversations_dir.exists():
                 for conv_file in conversations_dir.glob("*.json"):
-                    result = search_item(conv_file, query, "conversation", email, provider)
+                    result = search_item(conv_file, query, "conversation", email, provider, exact=exact)
                     if result:
                         results.append(result)
 
@@ -305,7 +320,7 @@ def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True)
             projects_dir = user_dir / "projects"
             if projects_dir.exists():
                 for proj_file in projects_dir.glob("*.json"):
-                    result = search_item(proj_file, query, "project", email, provider)
+                    result = search_item(proj_file, query, "project", email, provider, exact=exact)
                     if result:
                         results.append(result)
 
@@ -321,17 +336,19 @@ def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True)
     return results
 
 
-def highlight_query(text: str, query: str) -> str:
+def highlight_query(text: str, query: str, exact: bool = False) -> str:
     """Highlight query matches in text with color."""
-    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    terms = [query] if exact else query.split()
+    for term in terms:
+        pattern = re.compile(re.escape(term), re.IGNORECASE)
+        text = pattern.sub(
+            lambda m: f"{Colors.BRIGHT_YELLOW}{Colors.BOLD}{m.group()}{Colors.RESET}",
+            text
+        )
+    return text
 
-    def replacer(match):
-        return f"{Colors.BRIGHT_YELLOW}{Colors.BOLD}{match.group()}{Colors.RESET}"
 
-    return pattern.sub(replacer, text)
-
-
-def print_results(results: List[SearchResult], query: str):
+def print_results(results: List[SearchResult], query: str, exact: bool = False):
     """Print search results with colorful formatting."""
     if not results:
         print(f"{Colors.RED}No results found.{Colors.RESET}")
@@ -355,7 +372,7 @@ def print_results(results: List[SearchResult], query: str):
         # Show matches (up to 5)
         print()
         for j, match in enumerate(result.matches[:5], 1):
-            highlighted = highlight_query(match.text, query)
+            highlighted = highlight_query(match.text, query, exact=exact)
             print(f"  {Colors.DIM}{j}.{Colors.RESET} {highlighted}")
 
         if len(result.matches) > 5:
@@ -470,7 +487,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s "machine learning"
+  %(prog)s "machine learning"          # find convos containing both words
+  %(prog)s -e "machine learning"       # find exact phrase "machine learning"
   %(prog)s "python code" -j > results.json
   %(prog)s "API design" -o 3
   %(prog)s "deployment" -t
@@ -481,6 +499,12 @@ Examples:
     parser.add_argument(
         "query",
         help="Search query (case-insensitive)"
+    )
+
+    parser.add_argument(
+        "-e", "--exact",
+        action="store_true",
+        help="Search for exact phrase (default: match all words individually)"
     )
 
     parser.add_argument(
@@ -528,7 +552,7 @@ Examples:
     data_dir = Path(config.get("DATA_DIR", script_dir / LLM_DATA_SUBDIR)).expanduser()
 
     # Perform search
-    results = search_archive(data_dir, args.query, apply_recency_boost=not args.no_recency)
+    results = search_archive(data_dir, args.query, apply_recency_boost=not args.no_recency, exact=args.exact)
 
     # Re-sort by updated date then score if requested (most recent at bottom)
     if args.time_sort:
@@ -538,7 +562,7 @@ Examples:
     if args.json:
         print_json(results)
     else:
-        print_results(results, args.query)
+        print_results(results, args.query, exact=args.exact)
 
     # Open in editor if requested
     if args.open:

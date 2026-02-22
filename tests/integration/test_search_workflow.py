@@ -190,6 +190,82 @@ def test_search_no_results(isolated_workspace, sample_claude_export, repo_root, 
 
 
 @pytest.mark.integration
+def test_search_multi_term_default(isolated_workspace, sample_claude_export, repo_root, test_env_file):
+    """Test that default search finds conversations containing all words individually (AND logic)."""
+    # Setup: Import conversations first
+    zip_dest = isolated_workspace / "data-2025-01-05.zip"
+    shutil.copy(sample_claude_export, zip_dest)
+
+    sync_result = subprocess.run(
+        [sys.executable, str(repo_root / "sync_local_chats_archive.py"), "--claude"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+    assert sync_result.returncode == 0, "Setup sync failed"
+
+    # "write" and "keyword" both appear in conv-uuid-001 but NOT as a contiguous phrase
+    # "write" is in "How do I write a Python function?"
+    # "keyword" is in "Here's how to write a Python function with def keyword."
+    result = subprocess.run(
+        [sys.executable, str(repo_root / "full_text_search_chats_archive.py"), "write keyword"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+
+    print(f"\nMulti-term search STDOUT:\n{result.stdout}")
+    print(f"\nMulti-term search STDERR:\n{result.stderr}")
+
+    assert result.returncode == 0, f"Search failed: {result.stderr}"
+    assert "Test Conversation 1" in result.stdout, "Expected conversation not found with multi-term default search"
+
+
+@pytest.mark.integration
+def test_search_exact_flag(isolated_workspace, sample_claude_export, repo_root, test_env_file):
+    """Test that -e/--exact flag restores exact-phrase behavior."""
+    # Setup: Import conversations first
+    zip_dest = isolated_workspace / "data-2025-01-05.zip"
+    shutil.copy(sample_claude_export, zip_dest)
+
+    sync_result = subprocess.run(
+        [sys.executable, str(repo_root / "sync_local_chats_archive.py"), "--claude"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+    assert sync_result.returncode == 0, "Setup sync failed"
+
+    # With -e, "write keyword" should NOT match (not a contiguous phrase)
+    result_no_match = subprocess.run(
+        [sys.executable, str(repo_root / "full_text_search_chats_archive.py"), "-e", "write keyword"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+
+    print(f"\nExact non-match STDOUT:\n{result_no_match.stdout}")
+
+    assert result_no_match.returncode == 0, f"Search failed: {result_no_match.stderr}"
+    assert "Test Conversation 1" not in result_no_match.stdout, \
+        "Exact search should not find conversation when phrase is non-contiguous"
+
+    # With -e, "Python function" SHOULD match (it IS a contiguous phrase)
+    result_match = subprocess.run(
+        [sys.executable, str(repo_root / "full_text_search_chats_archive.py"), "-e", "Python function"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+
+    print(f"\nExact match STDOUT:\n{result_match.stdout}")
+
+    assert result_match.returncode == 0, f"Search failed: {result_match.stderr}"
+    assert "Test Conversation 1" in result_match.stdout, \
+        "Exact search should find conversation when phrase exists verbatim"
+
+
+@pytest.mark.integration
 def test_search_scoring_accuracy(isolated_workspace, sample_claude_export, repo_root, test_env_file):
     """Test that search scoring ranks results correctly."""
     # Setup: Import conversations
