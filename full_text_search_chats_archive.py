@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR
+from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR, CLAUDE_CODE_DATA_DIR_ENV_KEY
 
 
 # ANSI color codes
@@ -62,13 +62,14 @@ class SearchResult:
     created_at: str
     updated_at: str
     email: str
-    provider: str  # "claude", "chatgpt", etc.
+    provider: str  # "claude", "chatgpt", "claude-code"
     filepath: Path
     matches: List[Match]
     total_score: float
+    extra: Optional[dict] = None  # Provider-specific metadata
 
     def get_provider_url(self) -> str:
-        """Generate provider URL for this item."""
+        """Generate provider URL or resume command for this item."""
         if self.provider == "claude":
             if self.type == "conversation":
                 return f"https://claude.ai/chat/{self.uuid}"
@@ -77,6 +78,9 @@ class SearchResult:
         elif self.provider == "chatgpt":
             # ChatGPT only has conversations, no projects
             return f"https://chatgpt.com/c/{self.uuid}"
+        elif self.provider == "claude-code":
+            cwd = (self.extra or {}).get("cwd", "~")
+            return f"cd {cwd} && claude -r {self.uuid}"
         else:
             return f"Unknown provider: {self.provider}"
 
@@ -186,26 +190,13 @@ def extract_text_from_project(data: dict) -> List[str]:
     return texts
 
 
-def search_item(filepath: Path, query: str, item_type: str, email: str, provider: str, exact: bool = False) -> Optional[SearchResult]:
+def find_matches_in_texts(texts: List[str], query: str, exact: bool = False) -> List[Match]:
     """
-    Search a single conversation or project file.
+    Search a list of text strings for query matches.
 
-    Returns SearchResult if matches found, None otherwise.
+    Returns list of Match objects with context snippets and scores.
+    Shared by search_item() and search_claude_code_archive().
     """
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
-        return None
-
-    # Extract text based on type
-    if item_type == "conversation":
-        texts = extract_text_from_conversation(data)
-    else:  # project
-        texts = extract_text_from_project(data)
-
-    # Search for query in all texts
     matches: List[Match] = []
     query_lower = query.lower()
 
@@ -246,6 +237,30 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
 
                     matches.append(Match(text=context, score=score))
 
+    return matches
+
+
+def search_item(filepath: Path, query: str, item_type: str, email: str, provider: str, exact: bool = False) -> Optional[SearchResult]:
+    """
+    Search a single conversation or project file.
+
+    Returns SearchResult if matches found, None otherwise.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
+        return None
+
+    # Extract text based on type
+    if item_type == "conversation":
+        texts = extract_text_from_conversation(data)
+    else:  # project
+        texts = extract_text_from_project(data)
+
+    matches = find_matches_in_texts(texts, query, exact=exact)
+
     if not matches:
         return None
 
@@ -255,6 +270,7 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
     # Bonus score if match in name
     name = data.get("name", "")
     name_lower = name.lower() if name else ""
+    query_lower = query.lower()
     if exact:
         name_matches = query_lower in name_lower
     else:
@@ -336,6 +352,75 @@ def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True,
     return results
 
 
+def search_claude_code_archive(cc_data_dir: Path, query: str, apply_recency_boost: bool = True, exact: bool = False) -> List[SearchResult]:
+    """
+    Search all Claude Code JSONL conversation archives.
+    """
+    import claude_code_parser as ccp
+
+    results: List[SearchResult] = []
+
+    if not cc_data_dir.exists():
+        print(f"Warning: Claude Code data directory not found: {cc_data_dir}", file=sys.stderr)
+        return results
+
+    for project_dir in cc_data_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+
+        project_slug = project_dir.name
+
+        for jsonl_file in project_dir.glob("*.jsonl"):
+            try:
+                lines = ccp.parse_jsonl(jsonl_file)
+            except Exception as e:
+                print(f"Warning: Could not read {jsonl_file}: {e}", file=sys.stderr)
+                continue
+
+            texts = ccp.extract_searchable_text(lines)
+            matches = find_matches_in_texts(texts, query, exact=exact)
+
+            if not matches:
+                continue
+
+            metadata = ccp.extract_session_metadata(lines)
+            total_score = sum(m.score for m in matches)
+
+            # Bonus score if match in name
+            name = metadata["name"]
+            name_lower = name.lower()
+            query_lower = query.lower()
+            if exact:
+                name_hit = query_lower in name_lower
+            else:
+                name_hit = all(w in name_lower for w in query_lower.split())
+            if name_hit:
+                total_score += 5
+
+            result = SearchResult(
+                type="conversation",
+                uuid=metadata["session_id"],
+                name=name,
+                created_at=metadata["created_at"],
+                updated_at=metadata["updated_at"],
+                email=project_slug,
+                provider="claude-code",
+                filepath=jsonl_file,
+                matches=matches,
+                total_score=total_score,
+                extra={"cwd": metadata["cwd"], "git_branch": metadata["git_branch"]},
+            )
+            results.append(result)
+
+    # Apply recency boost to scores
+    if apply_recency_boost:
+        for result in results:
+            result.total_score += recency_boost(result.updated_at)
+
+    results.sort(key=lambda r: -r.total_score)
+    return results
+
+
 def highlight_query(text: str, query: str, exact: bool = False) -> str:
     """Highlight query matches in text with color."""
     terms = [query] if exact else query.split()
@@ -363,10 +448,18 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
         type_label = result.type.upper()
         type_color = Colors.BRIGHT_CYAN if result.type == "conversation" else Colors.BRIGHT_MAGENTA
 
+        if result.provider == "claude-code":
+            type_label = "CLAUDE CODE"
+            type_color = Colors.BRIGHT_GREEN
+
         print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
         print(f"{Colors.DIM}UUID: {result.uuid}{Colors.RESET}")
         print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
-        print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
+
+        if result.provider == "claude-code":
+            print(f"{Colors.GREEN}Resume: {result.get_provider_url()}{Colors.RESET}")
+        else:
+            print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
         print(f"{Colors.DIM}Score: {result.total_score:.1f} | Matches: {len(result.matches)}{Colors.RESET}")
 
         # Show matches (up to 5)
@@ -390,19 +483,23 @@ def print_json(results: List[SearchResult]):
     """Print results as JSON."""
     output = []
     for result in results:
-        output.append({
+        entry = {
             "type": result.type,
             "uuid": result.uuid,
             "name": result.name,
             "created_at": result.created_at,
             "updated_at": result.updated_at,
             "email": result.email,
+            "provider": result.provider,
             "url": result.get_provider_url(),
             "filepath": str(result.filepath),
             "total_score": result.total_score,
             "match_count": len(result.matches),
-            "matches": [{"text": m.text, "score": m.score} for m in result.matches]
-        })
+            "matches": [{"text": m.text, "score": m.score} for m in result.matches],
+        }
+        if result.extra:
+            entry["extra"] = result.extra
+        output.append(entry)
 
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
@@ -422,7 +519,7 @@ def open_in_editor(results: List[SearchResult], count: int, config: dict):
     script_dir = Path(__file__).parent.resolve()
     sys.path.insert(0, str(script_dir))
     try:
-        from view_conversation import conversation_to_markdown, get_output_path
+        from view_conversation import conversation_to_markdown, claude_code_to_markdown, get_output_path
     except ImportError as e:
         print(f"Error: Could not import view_conversation: {e}", file=sys.stderr)
         sys.exit(1)
@@ -446,11 +543,12 @@ def open_in_editor(results: List[SearchResult], count: int, config: dict):
 
         # Load conversation data and convert to markdown
         try:
-            with open(result.filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Convert to markdown
-            markdown_content = conversation_to_markdown(data)
+            if result.provider == "claude-code":
+                markdown_content = claude_code_to_markdown(result.filepath)
+            else:
+                with open(result.filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                markdown_content = conversation_to_markdown(data)
 
             # Write markdown file
             with open(md_path, "w", encoding="utf-8") as f:
@@ -461,7 +559,7 @@ def open_in_editor(results: List[SearchResult], count: int, config: dict):
 
         except Exception as e:
             print(f"Warning: Could not convert {result.filepath.name} to markdown: {e}", file=sys.stderr)
-            # Fall back to opening the original JSON file
+            # Fall back to opening the original file
             markdown_files.append(str(result.filepath))
 
     if not markdown_files:
@@ -483,16 +581,17 @@ def open_in_editor(results: List[SearchResult], count: int, config: dict):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Full-text search for chat archives (Claude, ChatGPT, etc.).",
+        description="Full-text search for chat archives (Claude, ChatGPT, Claude Code).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s "machine learning"          # find convos containing both words
-  %(prog)s -e "machine learning"       # find exact phrase "machine learning"
+  %(prog)s "machine learning"              # find convos containing both words
+  %(prog)s -e "machine learning"           # find exact phrase "machine learning"
   %(prog)s "python code" -j > results.json
   %(prog)s "API design" -o 3
   %(prog)s "deployment" -t
   %(prog)s "deployment" -R
+  %(prog)s "archive" -s claude-code        # search only Claude Code sessions
         """
     )
 
@@ -532,6 +631,13 @@ Examples:
         help="Open top N results in $EDITOR"
     )
 
+    parser.add_argument(
+        "-s", "--source",
+        choices=["all", "llm", "claude-code"],
+        default="all",
+        help="Filter by source: all (default), llm (claude.ai/chatgpt), claude-code"
+    )
+
     args = parser.parse_args()
 
     # Get data directory
@@ -551,8 +657,24 @@ Examples:
     # Use configured DATA_DIR or default
     data_dir = Path(config.get("DATA_DIR", script_dir / LLM_DATA_SUBDIR)).expanduser()
 
-    # Perform search
-    results = search_archive(data_dir, args.query, apply_recency_boost=not args.no_recency, exact=args.exact)
+    # Perform search across requested sources
+    results: List[SearchResult] = []
+    recency = not args.no_recency
+
+    if args.source in ("all", "llm"):
+        results.extend(search_archive(data_dir, args.query, apply_recency_boost=recency, exact=args.exact))
+
+    if args.source in ("all", "claude-code"):
+        cc_data_dir_str = config.get(CLAUDE_CODE_DATA_DIR_ENV_KEY)
+        if cc_data_dir_str:
+            cc_data_dir = Path(cc_data_dir_str).expanduser()
+            results.extend(search_claude_code_archive(cc_data_dir, args.query, apply_recency_boost=recency, exact=args.exact))
+        elif args.source == "claude-code":
+            print(f"Error: {CLAUDE_CODE_DATA_DIR_ENV_KEY} not configured in .env", file=sys.stderr)
+            sys.exit(1)
+
+    # Re-sort combined results by score
+    results.sort(key=lambda r: -r.total_score)
 
     # Re-sort by updated date then score if requested (most recent at bottom)
     if args.time_sort:

@@ -1,0 +1,217 @@
+"""
+Parser for Claude Code JSONL conversation transcripts.
+
+Claude Code archives conversations as append-only JSONL files where each line
+is a self-contained JSON object with a `type` field. This module extracts
+searchable text, metadata, and structured conversation turns from those files.
+
+Shared by full_text_search_chats_archive.py and view_conversation.py.
+"""
+
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+
+def parse_jsonl(filepath: Path) -> list[dict]:
+    """Read a JSONL file and return list of parsed JSON objects.
+
+    Skips malformed lines with a warning to stderr.
+    """
+    lines = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for i, raw in enumerate(f, 1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                lines.append(json.loads(raw))
+            except json.JSONDecodeError as e:
+                print(f"Warning: {filepath}:{i}: malformed JSON: {e}", file=sys.stderr)
+    return lines
+
+
+def _first_user_prompt(lines: list[dict]) -> Optional[dict]:
+    """Return the first user line that contains an actual human prompt."""
+    for line in lines:
+        if line.get("type") == "user":
+            content = line.get("message", {}).get("content")
+            if isinstance(content, str) and content.strip():
+                return line
+    return None
+
+
+def _last_timestamped_line(lines: list[dict]) -> Optional[dict]:
+    """Return the last line that has a timestamp."""
+    for line in reversed(lines):
+        if line.get("timestamp"):
+            return line
+    return None
+
+
+def extract_session_metadata(lines: list[dict]) -> dict:
+    """Extract metadata from parsed JSONL lines.
+
+    Returns dict with keys:
+      session_id, cwd, git_branch, created_at, updated_at, name
+    """
+    first_prompt = _first_user_prompt(lines)
+    last_line = _last_timestamped_line(lines)
+
+    session_id = ""
+    cwd = ""
+    git_branch = None
+
+    # Get session_id and cwd from first available line with those fields
+    for line in lines:
+        if not session_id and line.get("sessionId"):
+            session_id = line["sessionId"]
+        if not cwd and line.get("cwd"):
+            cwd = line["cwd"]
+        if git_branch is None and line.get("gitBranch"):
+            git_branch = line["gitBranch"]
+        if session_id and cwd and git_branch is not None:
+            break
+
+    created_at = first_prompt.get("timestamp", "") if first_prompt else ""
+    updated_at = last_line.get("timestamp", "") if last_line else created_at
+
+    name = derive_conversation_name(lines)
+
+    return {
+        "session_id": session_id,
+        "cwd": cwd,
+        "git_branch": git_branch or "",
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "name": name,
+    }
+
+
+def extract_searchable_text(lines: list[dict]) -> list[str]:
+    """Extract text suitable for full-text search.
+
+    Includes:
+      - User messages where content is a string (actual human prompts)
+      - Assistant message content blocks of type "text"
+
+    Excludes everything else (thinking, tool_use, tool_results, system, etc.).
+    """
+    texts = []
+    for line in lines:
+        msg_type = line.get("type")
+
+        if msg_type == "user":
+            content = line.get("message", {}).get("content")
+            if isinstance(content, str) and content.strip():
+                texts.append(content)
+
+        elif msg_type == "assistant":
+            for block in line.get("message", {}).get("content", []):
+                if block.get("type") == "text" and block.get("text"):
+                    texts.append(block["text"])
+
+    return texts
+
+
+def extract_conversation_turns(lines: list[dict]) -> list[dict]:
+    """Extract structured conversation turns for markdown rendering.
+
+    Returns list of dicts with keys:
+      - role: "user" | "assistant"
+      - timestamp: str
+      - content: str (for user: the prompt; for assistant: concatenated text blocks)
+      - tool_uses: list[str] (tool names, for assistant turns only)
+
+    Consecutive assistant lines are merged into a single turn.
+    User lines that are tool_results (content is a list) are skipped.
+    """
+    turns = []
+    current_assistant = None
+
+    def _flush_assistant():
+        nonlocal current_assistant
+        if current_assistant and (current_assistant["content"] or current_assistant["tool_uses"]):
+            turns.append(current_assistant)
+        current_assistant = None
+
+    for line in lines:
+        msg_type = line.get("type")
+
+        if msg_type == "user":
+            content = line.get("message", {}).get("content")
+            if isinstance(content, str) and content.strip():
+                _flush_assistant()
+                turns.append({
+                    "role": "user",
+                    "timestamp": line.get("timestamp", ""),
+                    "content": content,
+                    "tool_uses": [],
+                })
+            # tool_result user lines (content is a list) are skipped
+
+        elif msg_type == "assistant":
+            if current_assistant is None:
+                current_assistant = {
+                    "role": "assistant",
+                    "timestamp": line.get("timestamp", ""),
+                    "content": "",
+                    "tool_uses": [],
+                }
+
+            for block in line.get("message", {}).get("content", []):
+                block_type = block.get("type")
+                if block_type == "text" and block.get("text"):
+                    if current_assistant["content"]:
+                        current_assistant["content"] += "\n\n"
+                    current_assistant["content"] += block["text"]
+                elif block_type == "tool_use" and block.get("name"):
+                    tool_name = block["name"]
+                    if tool_name not in current_assistant["tool_uses"]:
+                        current_assistant["tool_uses"].append(tool_name)
+                # thinking blocks are skipped
+
+    _flush_assistant()
+    return turns
+
+
+def find_session_file(cc_data_dir: Path, session_id: str) -> Optional[Path]:
+    """Find a JSONL file by session ID across all project-slug directories.
+
+    Searches cc_data_dir/{any-project-slug}/{session_id}.jsonl
+    """
+    if not cc_data_dir.exists():
+        return None
+
+    target = f"{session_id}.jsonl"
+    for project_dir in cc_data_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        candidate = project_dir / target
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def derive_conversation_name(lines: list[dict], max_length: int = 80) -> str:
+    """Get conversation name from first human prompt, truncated.
+
+    Falls back to '(untitled)' if no human prompt found.
+    """
+    first = _first_user_prompt(lines)
+    if not first:
+        return "(untitled)"
+
+    content = first.get("message", {}).get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        return "(untitled)"
+
+    # Take first line of the prompt, collapse whitespace
+    first_line = content.strip().split("\n")[0].strip()
+    # Collapse runs of whitespace
+    first_line = " ".join(first_line.split())
+
+    if len(first_line) <= max_length:
+        return first_line
+    return first_line[:max_length - 1] + "\u2026"

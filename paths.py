@@ -23,3 +23,8 @@ DATA_ROOT = Path("data")
 LLM_DATA_SUBDIR = DATA_ROOT / "llm_data"
 ARCHIVED_EXPORTS_SUBDIR = DATA_ROOT / "archived_exports"
 LOCAL_VIEWS_SUBDIR = DATA_ROOT / "local_views"
+
+# External data source for Claude Code conversations (JSONL archives).
+# Unlike LLM_DATA_SUBDIR, this path is external and must be configured
+# via CLAUDE_CODE_DATA_DIR in .env. There is no default under data/.
+CLAUDE_CODE_DATA_DIR_ENV_KEY = "CLAUDE_CODE_DATA_DIR"
