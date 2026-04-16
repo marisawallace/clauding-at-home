@@ -10,6 +10,7 @@ import argparse
 import html
 import json
 import os
+
 import subprocess
 import sys
 from datetime import datetime
@@ -17,6 +18,15 @@ from pathlib import Path
 from typing import Optional
 
 from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR
+
+CLAUDE_CHAT_URL_PREFIX = "https://claude.ai/chat/"
+
+
+def extract_uuid(value: str) -> str:
+    """Extract a UUID from a value that may be a Claude chat URL or a bare UUID."""
+    if value.startswith(CLAUDE_CHAT_URL_PREFIX):
+        return value[len(CLAUDE_CHAT_URL_PREFIX):]
+    return value
 
 
 def find_conversation_file(data_dir: Path, uuid: str) -> Optional[tuple[Path, str]]:
@@ -378,6 +388,7 @@ Examples:
     )
 
     args = parser.parse_args()
+    args.uuid = extract_uuid(args.uuid)
 
     # Get directories
     script_dir = Path(__file__).parent.resolve()
