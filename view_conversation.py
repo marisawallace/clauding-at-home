@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR, CLAUDE_CODE_DATA_DIR_ENV_KEY
+from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR, parse_claude_code_sources
 
 CLAUDE_CHAT_URL_PREFIX = "https://claude.ai/chat/"
 
@@ -458,14 +458,13 @@ Examples:
     result = find_conversation_file(data_dir, args.uuid)
 
     if not result:
-        # Try Claude Code
+        # Try Claude Code across each configured host source
         import claude_code_parser as ccp
-        cc_data_dir_str = config.get(CLAUDE_CODE_DATA_DIR_ENV_KEY)
-        if cc_data_dir_str:
-            cc_data_dir = Path(cc_data_dir_str).expanduser()
+        for _host, cc_data_dir in parse_claude_code_sources(config):
             cc_file = ccp.find_session_file(cc_data_dir, args.uuid)
             if cc_file:
                 result = (cc_file, "claude-code")
+                break
 
     if not result:
         print(f"Error: Conversation with UUID {args.uuid} not found.", file=sys.stderr)

@@ -24,7 +24,40 @@ LLM_DATA_SUBDIR = DATA_ROOT / "llm_data"
 ARCHIVED_EXPORTS_SUBDIR = DATA_ROOT / "archived_exports"
 LOCAL_VIEWS_SUBDIR = DATA_ROOT / "local_views"
 
-# External data source for Claude Code conversations (JSONL archives).
-# Unlike LLM_DATA_SUBDIR, this path is external and must be configured
-# via CLAUDE_CODE_DATA_DIR in .env. There is no default under data/.
-CLAUDE_CODE_DATA_DIR_ENV_KEY = "CLAUDE_CODE_DATA_DIR"
+# External data sources for Claude Code conversations (JSONL archives).
+# Configured via CLAUDE_CODE_SOURCES in .env as comma-separated host=path
+# pairs, e.g. "laptop=~/syncs/cc/laptop,desktop=~/syncs/cc/desktop". Each
+# path points at a per-machine ~/.claude/projects/ tree synced into a shared
+# location. The host label is stamped onto search results so the resume
+# command can be attributed to the originating machine.
+CLAUDE_CODE_SOURCES_ENV_KEY = "CLAUDE_CODE_SOURCES"
+
+
+def parse_claude_code_sources(config: dict) -> list[tuple[str, Path]]:
+    """Return list of (hostname, path) tuples parsed from CLAUDE_CODE_SOURCES.
+
+    Returns [] if the var is unset or empty.
+    """
+    raw = config.get(CLAUDE_CODE_SOURCES_ENV_KEY, "").strip()
+    if not raw:
+        return []
+
+    sources: list[tuple[str, Path]] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" not in entry:
+            raise ValueError(
+                f"{CLAUDE_CODE_SOURCES_ENV_KEY} entry {entry!r} is missing '=': "
+                f"expected 'host=path'"
+            )
+        host, path = entry.split("=", 1)
+        host = host.strip()
+        path = path.strip()
+        if not host or not path:
+            raise ValueError(
+                f"{CLAUDE_CODE_SOURCES_ENV_KEY} entry {entry!r} has empty host or path"
+            )
+        sources.append((host, Path(path).expanduser()))
+    return sources

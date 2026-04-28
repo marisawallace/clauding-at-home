@@ -26,7 +26,7 @@ def claude_code_workspace(isolated_workspace, repo_root):
         shutil.copy(repo_env, backup_env)
 
     env_content = (
-        f"CLAUDE_CODE_DATA_DIR={cc_dir}\n"
+        f"CLAUDE_CODE_SOURCES=testhost={cc_dir}\n"
         f"DATA_DIR={isolated_workspace / 'data' / 'llm_data'}\n"
         f"LOCAL_VIEWS_DIR={isolated_workspace / 'data' / 'local_views'}\n"
     )

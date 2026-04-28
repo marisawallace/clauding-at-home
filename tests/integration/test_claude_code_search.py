@@ -29,7 +29,7 @@ def claude_code_workspace(isolated_workspace, repo_root):
         shutil.copy(repo_env, backup_env)
 
     env_content = (
-        f"CLAUDE_CODE_DATA_DIR={cc_dir}\n"
+        f"CLAUDE_CODE_SOURCES=testhost={cc_dir}\n"
         f"DATA_DIR={isolated_workspace / 'data' / 'llm_data'}\n"
         f"LOCAL_VIEWS_DIR={isolated_workspace / 'data' / 'local_views'}\n"
     )
@@ -79,7 +79,9 @@ def test_search_claude_code_json_output(claude_code_workspace, repo_root):
     entry = data[0]
     assert entry["provider"] == "claude-code"
     assert "cwd" in entry.get("extra", {})
+    assert entry["extra"].get("host") == "testhost"
     assert "claude -r" in entry["url"]
+    assert "[testhost]" in entry["url"]
 
 
 @pytest.mark.integration
@@ -93,6 +95,7 @@ def test_search_claude_code_resume_command(claude_code_workspace, repo_root):
     )
 
     assert result.returncode == 0
+    assert "[testhost] cd " in result.stdout
     assert "claude -r cc-test-session-001" in result.stdout
 
 
@@ -126,8 +129,8 @@ def test_search_source_llm_excludes_claude_code(claude_code_workspace, repo_root
 
 @pytest.mark.integration
 def test_search_no_claude_code_dir_configured(isolated_workspace, repo_root):
-    """Search with --source claude-code fails gracefully when dir not configured."""
-    # Temporarily replace repo .env with one missing CLAUDE_CODE_DATA_DIR
+    """Search with --source claude-code fails gracefully when sources not configured."""
+    # Temporarily replace repo .env with one missing CLAUDE_CODE_SOURCES
     repo_env = repo_root / ".env"
     backup_env = repo_root / ".env.backup"
     if repo_env.exists():
@@ -150,3 +153,72 @@ def test_search_no_claude_code_dir_configured(isolated_workspace, repo_root):
             shutil.move(backup_env, repo_env)
         else:
             repo_env.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def multi_host_claude_code_workspace(isolated_workspace, repo_root):
+    """Set up a workspace with two host-labeled Claude Code source dirs.
+
+    Both hosts have a session at the same cwd (project slug) — exercises
+    the disambiguation guarantee that hostname comes from the synced root,
+    not from JSONL contents.
+    """
+    fixture = Path(__file__).parent.parent / "fixtures" / "sample_claude_code_session.jsonl"
+
+    # Two host roots, each with a JSONL under the same project slug
+    laptop_dir = isolated_workspace / "cc_sync" / "laptop"
+    desktop_dir = isolated_workspace / "cc_sync" / "desktop"
+    project_slug = "-home-testuser-projects-my-app"
+
+    (laptop_dir / project_slug).mkdir(parents=True)
+    (desktop_dir / project_slug).mkdir(parents=True)
+    shutil.copy(fixture, laptop_dir / project_slug / "cc-laptop-session.jsonl")
+    shutil.copy(fixture, desktop_dir / project_slug / "cc-desktop-session.jsonl")
+
+    repo_env = repo_root / ".env"
+    backup_env = repo_root / ".env.backup"
+    if repo_env.exists():
+        shutil.copy(repo_env, backup_env)
+
+    env_content = (
+        f"CLAUDE_CODE_SOURCES=laptop={laptop_dir},desktop={desktop_dir}\n"
+        f"DATA_DIR={isolated_workspace / 'data' / 'llm_data'}\n"
+        f"LOCAL_VIEWS_DIR={isolated_workspace / 'data' / 'local_views'}\n"
+    )
+    repo_env.write_text(env_content)
+
+    yield isolated_workspace
+
+    if backup_env.exists():
+        shutil.move(backup_env, repo_env)
+    else:
+        repo_env.unlink(missing_ok=True)
+
+
+@pytest.mark.integration
+def test_search_claude_code_multi_source(multi_host_claude_code_workspace, repo_root):
+    """Both host sources surface in results, each tagged with its hostname."""
+    result = subprocess.run(
+        [sys.executable, str(repo_root / "full_text_search_chats_archive.py"),
+         "virtual environment", "-s", "claude-code", "-j"],
+        capture_output=True,
+        text=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+
+    # Each host's JSONL is a copy of the same fixture (same sessionId baked
+    # in), so we expect two distinct results disambiguated by host even
+    # though their cwd and uuid match — that's the whole point of this test.
+    assert len(data) == 2
+
+    hosts = sorted(entry["extra"]["host"] for entry in data)
+    assert hosts == ["desktop", "laptop"]
+
+    by_host = {entry["extra"]["host"]: entry for entry in data}
+    assert "[laptop]" in by_host["laptop"]["url"]
+    assert "[desktop]" in by_host["desktop"]["url"]
+    # Filepaths must come from each host's own synced root
+    assert "/cc_sync/laptop/" in by_host["laptop"]["filepath"]
+    assert "/cc_sync/desktop/" in by_host["desktop"]["filepath"]

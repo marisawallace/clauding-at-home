@@ -17,9 +17,14 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
-from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR, CLAUDE_CODE_DATA_DIR_ENV_KEY
+from paths import (
+    LLM_DATA_SUBDIR,
+    LOCAL_VIEWS_SUBDIR,
+    CLAUDE_CODE_SOURCES_ENV_KEY,
+    parse_claude_code_sources,
+)
 
 
 # ANSI color codes
@@ -80,8 +85,11 @@ class SearchResult:
             # ChatGPT only has conversations, no projects
             return f"https://chatgpt.com/c/{self.uuid}"
         elif self.provider == "claude-code":
-            cwd = (self.extra or {}).get("cwd", "~")
-            return f"cd {cwd} && claude -r {self.uuid}"
+            extra = self.extra or {}
+            cwd = extra.get("cwd", "~")
+            host = extra.get("host", "")
+            prefix = f"[{host}] " if host else ""
+            return f"{prefix}cd {cwd} && claude -r {self.uuid}"
         else:
             return f"Unknown provider: {self.provider}"
 
@@ -353,65 +361,71 @@ def search_archive(data_dir: Path, query: str, apply_recency_boost: bool = True,
     return results
 
 
-def search_claude_code_archive(cc_data_dir: Path, query: str, apply_recency_boost: bool = True, exact: bool = False) -> List[SearchResult]:
+def search_claude_code_archive(sources: List[Tuple[str, Path]], query: str, apply_recency_boost: bool = True, exact: bool = False) -> List[SearchResult]:
     """
-    Search all Claude Code JSONL conversation archives.
+    Search Claude Code JSONL conversation archives across one or more
+    host-labeled source directories.
     """
     import claude_code_parser as ccp
 
     results: List[SearchResult] = []
 
-    if not cc_data_dir.exists():
-        print(f"Warning: Claude Code data directory not found: {cc_data_dir}", file=sys.stderr)
-        return results
-
-    for project_dir in cc_data_dir.iterdir():
-        if not project_dir.is_dir():
+    for host, cc_data_dir in sources:
+        if not cc_data_dir.exists():
+            print(f"Warning: Claude Code data directory not found: {cc_data_dir} (host {host})", file=sys.stderr)
             continue
 
-        project_slug = project_dir.name
-
-        for jsonl_file in project_dir.glob("*.jsonl"):
-            try:
-                lines = ccp.parse_jsonl(jsonl_file)
-            except Exception as e:
-                print(f"Warning: Could not read {jsonl_file}: {e}", file=sys.stderr)
+        for project_dir in cc_data_dir.iterdir():
+            if not project_dir.is_dir():
                 continue
 
-            texts = ccp.extract_searchable_text(lines)
-            matches = find_matches_in_texts(texts, query, exact=exact)
+            project_slug = project_dir.name
 
-            if not matches:
-                continue
+            for jsonl_file in project_dir.glob("*.jsonl"):
+                try:
+                    lines = ccp.parse_jsonl(jsonl_file)
+                except Exception as e:
+                    print(f"Warning: Could not read {jsonl_file}: {e}", file=sys.stderr)
+                    continue
 
-            metadata = ccp.extract_session_metadata(lines)
-            total_score = sum(m.score for m in matches)
+                texts = ccp.extract_searchable_text(lines)
+                matches = find_matches_in_texts(texts, query, exact=exact)
 
-            # Bonus score if match in name
-            name = metadata["name"]
-            name_lower = name.lower()
-            query_lower = query.lower()
-            if exact:
-                name_hit = query_lower in name_lower
-            else:
-                name_hit = all(w in name_lower for w in query_lower.split())
-            if name_hit:
-                total_score += 5
+                if not matches:
+                    continue
 
-            result = SearchResult(
-                type="conversation",
-                uuid=metadata["session_id"],
-                name=name,
-                created_at=metadata["created_at"],
-                updated_at=metadata["updated_at"],
-                email=project_slug,
-                provider="claude-code",
-                filepath=jsonl_file,
-                matches=matches,
-                total_score=total_score,
-                extra={"cwd": metadata["cwd"], "git_branch": metadata["git_branch"]},
-            )
-            results.append(result)
+                metadata = ccp.extract_session_metadata(lines)
+                total_score = sum(m.score for m in matches)
+
+                # Bonus score if match in name
+                name = metadata["name"]
+                name_lower = name.lower()
+                query_lower = query.lower()
+                if exact:
+                    name_hit = query_lower in name_lower
+                else:
+                    name_hit = all(w in name_lower for w in query_lower.split())
+                if name_hit:
+                    total_score += 5
+
+                result = SearchResult(
+                    type="conversation",
+                    uuid=metadata["session_id"],
+                    name=name,
+                    created_at=metadata["created_at"],
+                    updated_at=metadata["updated_at"],
+                    email=project_slug,
+                    provider="claude-code",
+                    filepath=jsonl_file,
+                    matches=matches,
+                    total_score=total_score,
+                    extra={
+                        "cwd": metadata["cwd"],
+                        "git_branch": metadata["git_branch"],
+                        "host": host,
+                    },
+                )
+                results.append(result)
 
     # Apply recency boost to scores
     if apply_recency_boost:
@@ -669,12 +683,11 @@ Examples:
         results.extend(search_archive(data_dir, args.query, apply_recency_boost=recency, exact=args.exact))
 
     if args.source in ("all", "claude-code"):
-        cc_data_dir_str = config.get(CLAUDE_CODE_DATA_DIR_ENV_KEY)
-        if cc_data_dir_str:
-            cc_data_dir = Path(cc_data_dir_str).expanduser()
-            results.extend(search_claude_code_archive(cc_data_dir, args.query, apply_recency_boost=recency, exact=args.exact))
+        cc_sources = parse_claude_code_sources(config)
+        if cc_sources:
+            results.extend(search_claude_code_archive(cc_sources, args.query, apply_recency_boost=recency, exact=args.exact))
         elif args.source == "claude-code":
-            print(f"Error: {CLAUDE_CODE_DATA_DIR_ENV_KEY} not configured in .env", file=sys.stderr)
+            print(f"Error: {CLAUDE_CODE_SOURCES_ENV_KEY} not configured in .env", file=sys.stderr)
             sys.exit(1)
 
     # Re-sort combined results by score
