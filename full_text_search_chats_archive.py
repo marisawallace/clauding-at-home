@@ -44,6 +44,7 @@ class Colors:
     BRIGHT_BLUE = "\033[94m"
     BRIGHT_MAGENTA = "\033[95m"
     BRIGHT_CYAN = "\033[96m"
+    ORANGE = "\033[38;5;208m"
 
 
 @dataclass
@@ -450,15 +451,18 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
 
         if result.provider == "claude-code":
             type_label = "CLAUDE CODE"
-            type_color = Colors.BRIGHT_GREEN
+            type_color = Colors.ORANGE
 
         print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
-        print(f"{Colors.DIM}UUID: {result.uuid}{Colors.RESET}")
-        print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
-
+        # Skip the UUID line for claude-code results: the UUID is already visible
+        # (and easy to copy) in the `claude -r <uuid>` resume command printed below.
+        if result.provider != "claude-code":
+            print(f"{Colors.DIM}UUID: {result.uuid}{Colors.RESET}")
         if result.provider == "claude-code":
-            print(f"{Colors.GREEN}Resume: {result.get_provider_url()}{Colors.RESET}")
+            print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}{Colors.RESET}")
+            print(f"{Colors.ORANGE}{result.get_provider_url()}{Colors.RESET}")
         else:
+            print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
             print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
         print(f"{Colors.DIM}Score: {result.total_score:.1f} | Matches: {len(result.matches)}{Colors.RESET}")
 
