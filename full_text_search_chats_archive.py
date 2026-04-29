@@ -25,6 +25,7 @@ from paths import (
     LOCAL_VIEWS_SUBDIR,
     CLAUDE_CODE_SOURCES_ENV_KEY,
     parse_claude_code_sources,
+    resolve_host_name,
 )
 
 
@@ -487,7 +488,7 @@ def highlight_query(text: str, query: str, exact: bool = False) -> str:
     return text
 
 
-def print_results(results: List[SearchResult], query: str, exact: bool = False):
+def print_results(results: List[SearchResult], query: str, exact: bool = False, current_host: str = ""):
     """Print search results with colorful formatting."""
     if not results:
         print(f"{Colors.RED}No results found.{Colors.RESET}")
@@ -512,7 +513,7 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
         if result.provider == "claude":
             type_label = "CLAUDE.AI"
 
-        print(f"{Colors.BOLD}{type_color}{type_label}{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
+        print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
         # Skip the UUID line for claude-code results: the UUID is already visible
         # (and easy to copy) in the `claude -r <uuid>` resume command printed below.
         if result.provider != "claude-code":
@@ -523,7 +524,12 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
             host = extra.get("host", "")
             host_suffix = f" | {host}" if host else ""
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}{host_suffix}{Colors.RESET}")
-            print(f"{Colors.ORANGE}cd {shlex.quote(cwd)} && claude -r {result.uuid}{Colors.RESET}")
+            # Dim the resume command if the result is from a different host —
+            # `claude -r` won't find the session locally, so it's not actionable here.
+            resume_color = Colors.ORANGE
+            if current_host and host and host != current_host:
+                resume_color = Colors.DIM
+            print(f"{resume_color}cd {shlex.quote(cwd)} && claude -r {result.uuid}{Colors.RESET}")
         else:
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
             print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
@@ -750,7 +756,7 @@ Examples:
     if args.json:
         print_json(results)
     else:
-        print_results(results, args.query, exact=args.exact)
+        print_results(results, args.query, exact=args.exact, current_host=resolve_host_name(config))
 
     # Open in editor if requested
     if args.open:
