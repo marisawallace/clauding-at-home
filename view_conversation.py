@@ -10,14 +10,14 @@ import argparse
 import html
 import json
 import os
-
+import shlex
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR
+from paths import LLM_DATA_SUBDIR, LOCAL_VIEWS_SUBDIR, parse_claude_code_sources
 
 CLAUDE_CHAT_URL_PREFIX = "https://claude.ai/chat/"
 
@@ -348,6 +348,49 @@ def conversation_to_html(data: dict) -> str:
     return "\n".join(html_parts)
 
 
+def claude_code_to_markdown(filepath: Path) -> str:
+    """Convert a Claude Code JSONL session to Markdown."""
+    import claude_code_parser as ccp
+
+    lines = ccp.parse_jsonl(filepath)
+    metadata = ccp.extract_session_metadata(lines)
+    turns = ccp.extract_conversation_turns(lines)
+
+    parts = []
+
+    # Header
+    parts.append(f"# {metadata['name']}\n")
+    parts.append(f"**Session:** `{metadata['session_id']}`  ")
+    parts.append(f"**Directory:** `{metadata['cwd']}`  ")
+    if metadata["git_branch"]:
+        parts.append(f"**Branch:** `{metadata['git_branch']}`  ")
+    parts.append(f"**Created:** {format_timestamp(metadata['created_at'])}  ")
+    parts.append(f"**Updated:** {format_timestamp(metadata['updated_at'])}  ")
+    resume_cmd = f"cd {shlex.quote(metadata['cwd'])} && claude -r {metadata['session_id']}"
+    parts.append(f"**Resume:** `{resume_cmd}`  ")
+    parts.append("\n---\n")
+
+    # Conversation turns
+    for turn in turns:
+        timestamp = format_timestamp(turn["timestamp"])
+        if turn["role"] == "user":
+            parts.append(f"\n## User\n")
+            parts.append(f"*{timestamp}*\n")
+            parts.append(f"\n{turn['content']}\n")
+        else:
+            parts.append(f"\n## Assistant\n")
+            parts.append(f"*{timestamp}*\n")
+            if turn["content"]:
+                parts.append(f"\n{turn['content']}\n")
+            if turn["tool_uses"]:
+                tools = ", ".join(turn["tool_uses"])
+                parts.append(f"\n*Tools used: {tools}*\n")
+
+        parts.append("\n---\n")
+
+    return "\n".join(parts)
+
+
 def get_output_path(local_views_dir: Path, uuid: str, provider: str, format: str = "markdown") -> Path:
     """Get output path for the specified format, namespaced by provider."""
     extension = "md" if format == "markdown" else "html"
@@ -359,7 +402,7 @@ def get_output_path(local_views_dir: Path, uuid: str, provider: str, format: str
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="View a conversation as Markdown or HTML (Claude, ChatGPT, etc.).",
+        description="View a conversation as Markdown or HTML (Claude, ChatGPT, Claude Code).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -371,7 +414,7 @@ Examples:
 
     parser.add_argument(
         "uuid",
-        help="UUID of the conversation to view"
+        help="UUID of the conversation or Claude Code session ID to view"
     )
 
     parser.add_argument(
@@ -411,9 +454,18 @@ Examples:
     # Create local_views directory if it doesn't exist
     local_views_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find conversation file
+    # Find conversation file — try LLM providers first, then Claude Code
     print(f"Searching for conversation {args.uuid}...")
     result = find_conversation_file(data_dir, args.uuid)
+
+    if not result:
+        # Try Claude Code across each configured host source
+        import claude_code_parser as ccp
+        for _host, cc_data_dir in parse_claude_code_sources(config):
+            cc_file = ccp.find_session_file(cc_data_dir, args.uuid)
+            if cc_file:
+                result = (cc_file, "claude-code")
+                break
 
     if not result:
         print(f"Error: Conversation with UUID {args.uuid} not found.", file=sys.stderr)
@@ -432,17 +484,18 @@ Examples:
     else:
         # Load and convert
         try:
-            with open(conv_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            if provider == "claude-code":
+                content = claude_code_to_markdown(conv_file)
+            else:
+                with open(conv_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if args.format == "markdown":
+                    content = conversation_to_markdown(data)
+                else:  # html
+                    content = conversation_to_html(data)
         except Exception as e:
-            print(f"Error reading conversation file: {e}", file=sys.stderr)
+            print(f"Error converting conversation: {e}", file=sys.stderr)
             sys.exit(1)
-
-        # Convert to appropriate format
-        if args.format == "markdown":
-            content = conversation_to_markdown(data)
-        else:  # html
-            content = conversation_to_html(data)
 
         # Write file
         try:

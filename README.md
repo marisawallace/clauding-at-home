@@ -1,10 +1,10 @@
 ![Demo gif showing searching in the terminal](demo.gif)
 
-I wanted full-text search for my [claude.ai](https://claude.ai/) chats, so I made this.
+I wanted offline full-text search and ownership over *all* my LLM chats. I made this.
 
 ## Features
 
-- **Multi-provider**: currently Claude and ChatGPT.
+- **Multi-provider**: currently Claude, ChatGPT, and Claude Code.
 - **Multi-account** per provider.
 - **Smart search ranking**
 - **Hyperlinks in the results**: easy resume when you've found *that chat*
@@ -13,6 +13,7 @@ I wanted full-text search for my [claude.ai](https://claude.ai/) chats, so I mad
 - **Non-destructive sync**: preserves a chat even if you deleted it on the website. Export/sync the last 30 days only and it'll preserve your older chats. 
 - **Export backup**: automatic archive of your data export zipfiles
 - **UUID tracking**: Correctly handles conversation renames
+- **Canonical**: Sync your `clauding-at-home/data/` folder across all your machines (MEGA, Dropbox, etc.). Your full LLM history travels with you.
 - **Simple**: just a folder of python scripts. Works with system python.
 - **Completely offline**
 
@@ -56,13 +57,13 @@ export EDITOR="$VISUAL"
 1. [https://claude.ai/settings/data-privacy-controls](https://claude.ai/settings/data-privacy-controls)
 2. Click "Export data"
 3. Download the .zip file
-4. `your-alias`, `csscl`, or `python3 sync_local_chats_archive.py --claude`
+4. Run `your-alias`, `csscl`, or `python3 sync_local_chats_archive.py --claude`
 
 #### ChatGPT
 1. [https://chatgpt.com/#settings/DataControls](https://chatgpt.com/#settings/DataControls)
 2. Click "Export data"
 3. Download the .zip file
-4. `your-alias`, `cssch`, or `python3 sync_local_chats_archive.py --chatgpt`
+4. Run `your-alias`, `cssch`, or `python3 sync_local_chats_archive.py --chatgpt`
 
 The sync script will:
 - Find all export zip files matching the provider's pattern
@@ -81,6 +82,28 @@ The sync script includes multiple safety mechanisms:
 - **Validation checks**: Verifies export format before processing
 
 Then everything should just work!
+
+
+#### Claude Code
+
+Writes a JSONL transcript per session under `~/.claude/projects/`. By default, these are local to your machine-- not synced to the cloud.
+
+`claude_code_hook.py` in this repo can archive all those sessions for search, sync, and markdown editing.
+
+Setup is one command:
+
+```
+python3 migrations/002_setup_claude_code_archival.py
+```
+
+Which adds hooks in your `~/.claude/settings.json` to call `claude_code_hook.py`. Sessions are archived under `data/llm_data/claude-code/[HOSTNAME]/`
+
+Sync `data/` across multiple machines (MEGA, Dropbox, etc.), no problem.
+
+
+**Assumption**: Claude Code JSONL transcripts are immutable append-only logs.
+
+The line-count-based sync depends on this. If this changes, archives could diverge from `~/.claude/projects/` — the hook writes to `claude_code_anomalies.log` as a canary.
 
 ## Usage (if you set up based aliases)
 
@@ -121,11 +144,15 @@ clauding-at-home/
 │   │   │       ├── projects/
 │   │   │       │   └── YYYY-MM-DD_Project.json
 │   │   │       └── user.json
-│   │   └── chatgpt/
-│   │       └── user@example.com/
-│   │           ├── conversations/
-│   │           │   └── YYYY-MM-DD_Title.json
-│   │           └── user.json
+│   │   ├── chatgpt/
+│   │   │   └── user@example.com/
+│   │   │       ├── conversations/
+│   │   │       │   └── YYYY-MM-DD_Title.json
+│   │   │       └── user.json
+│   │   └── claude-code/            # Claude Code session archives
+│   │       └── <hostname>/         # one subdir per machine
+│   │           └── <project-slug>/
+│   │               └── <session-id>.jsonl
 │   ├── archived_exports/           # Processed export zip files
 │   │   ├── claude/
 │   │   │   └── data-YYYY-MM-DD-*.zip
@@ -139,8 +166,10 @@ clauding-at-home/
 │           ├── {uuid}.md
 │           └── {uuid}.html
 ├── migrations/                     # One-time data migration scripts
-│   └── 001_consolidate_data_dirs.py
+│   ├── 001_consolidate_data_dirs.py
+│   └── 002_setup_claude_code_archival.py
 ├── sync_local_chats_archive.py     # Import and sync exports
+├── claude_code_hook.py             # Claude Code Stop/SessionEnd hook
 ├── full_text_search_chats_archive.py  # Search conversations
 └── view_conversation.py            # View conversations as MD/HTML
 ```
