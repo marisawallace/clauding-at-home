@@ -16,6 +16,8 @@ Any of these can be overridden via .env:
 """
 from __future__ import annotations
 
+import re
+import socket
 from pathlib import Path
 
 # Single sync root - everything lives under here
@@ -40,17 +42,50 @@ LOCAL_VIEWS_SUBDIR = DATA_ROOT / "local_views"
 # be attributed to the originating machine.
 CLAUDE_CODE_SOURCES_ENV_KEY = "CLAUDE_CODE_SOURCES"
 
+# Optional override for the human-readable name of this machine. If unset,
+# we normalize socket.gethostname() (lowercased, .local stripped).
+CLAUDE_CODE_HOST_ENV_KEY = "CLAUDE_CODE_HOST"
 
-def parse_claude_code_sources(config: dict) -> list[tuple[str, Path]]:
-    """Return list of (hostname, path) tuples parsed from CLAUDE_CODE_SOURCES.
 
-    Returns [] if the var is unset or empty.
+def load_env_file(path: Path) -> dict:
+    """Parse a simple .env file into a dict.
+
+    - utf-8
+    - blank lines and lines starting with '#' are ignored
+    - inline trailing '#' comments are stripped only when preceded by whitespace
+      (so a literal '#' inside an unquoted value still works as long as it isn't
+      preceded by whitespace)
+    - matching surrounding single or double quotes are stripped from the value
     """
-    raw = config.get(CLAUDE_CODE_SOURCES_ENV_KEY, "").strip()
+    config: dict = {}
+    if not path.exists():
+        return config
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        m = re.search(r"\s+#", value)
+        if m:
+            value = value[: m.start()].rstrip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        config[key] = value
+    return config
+
+
+def parse_sources_string(raw: str) -> list[tuple[str, str]]:
+    """Parse a 'host1=path1,host2=path2' string into [(host, path), ...].
+
+    Returns raw strings without expanduser/Path conversion. Raises ValueError
+    on malformed entries.
+    """
+    raw = raw.strip()
     if not raw:
         return []
-
-    sources: list[tuple[str, Path]] = []
+    out: list[tuple[str, str]] = []
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
@@ -67,5 +102,37 @@ def parse_claude_code_sources(config: dict) -> list[tuple[str, Path]]:
             raise ValueError(
                 f"{CLAUDE_CODE_SOURCES_ENV_KEY} entry {entry!r} has empty host or path"
             )
-        sources.append((host, Path(path).expanduser()))
-    return sources
+        out.append((host, path))
+    return out
+
+
+def parse_claude_code_sources(config: dict) -> list[tuple[str, Path]]:
+    """Return list of (host, expanded Path) tuples parsed from CLAUDE_CODE_SOURCES.
+
+    Returns [] if the var is unset or empty.
+    """
+    raw = config.get(CLAUDE_CODE_SOURCES_ENV_KEY, "")
+    return [(h, Path(p).expanduser()) for h, p in parse_sources_string(raw)]
+
+
+def normalize_hostname(raw: str) -> str:
+    """Lowercase and strip a trailing '.local' (macOS Bonjour suffix)."""
+    name = raw.strip().lower()
+    if name.endswith(".local"):
+        name = name[: -len(".local")]
+    return name
+
+
+def resolve_host_name(config: dict) -> str:
+    """Return the human-readable host name for this machine.
+
+    Reads CLAUDE_CODE_HOST from `config` if set; otherwise falls back to a
+    normalized socket.gethostname(). The explicit override exists because
+    macOS hostnames are unstable (network-dependent, can flip between
+    'machine.local' and 'machine-2.local'), so a hand-picked name is more
+    reliable for cross-machine search attribution.
+    """
+    explicit = config.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip()
+    if explicit:
+        return explicit
+    return normalize_hostname(socket.gethostname())

@@ -97,10 +97,14 @@ python3 migrations/002_setup_claude_code_archival.py
 
 That migration will:
 
+- Prompt for a human-readable name for this machine (defaults to a
+  normalized `gethostname()`, e.g. `marisas-mbp`), and write it as
+  `CLAUDE_CODE_HOST` to `.env`. The override exists because macOS hostnames
+  drift with network conditions; pin it once and it stays put.
 - Add `Stop` and `SessionEnd` hooks to `~/.claude/settings.json` (with a
   timestamped backup) pointing at `claude_code_hook.py` in this repo.
-- Write `CLAUDE_CODE_SOURCES=<hostname>=<absolute-archive-path>` to `.env`.
-- Create `data/llm_data/claude-code/<hostname>/` as the archive root.
+- Write `CLAUDE_CODE_SOURCES=<host>=<absolute-archive-path>` to `.env`.
+- Create `data/llm_data/claude-code/<host>/` as the archive root.
 - Optionally, prompt to backfill any existing `~/.claude/projects/`
   transcripts into the archive in one shot (with size + progress) so the
   first real session doesn't pay that cost.
@@ -128,7 +132,7 @@ diverge — the hook writes to `claude_code_anomalies.log` as a canary.
 
 To uninstall: delete the `Stop` and `SessionEnd` entries pointing at
 `claude_code_hook.py` from `~/.claude/settings.json`, and unset
-`CLAUDE_CODE_SOURCES` in `.env`.
+`CLAUDE_CODE_HOST` and `CLAUDE_CODE_SOURCES` in `.env`.
 
 ## Usage (if you set up based aliases)
 

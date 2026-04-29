@@ -7,17 +7,19 @@ SessionEnd event reconciles ~/.claude/projects/ JSONLs into a per-host
 archive that the search/view tools index.
 
 What it does:
-  1. Adds Stop + SessionEnd hooks to ~/.claude/settings.json (with backup)
-  2. Upserts CLAUDE_CODE_SOURCES=<hostname>=<archive-path> in .env
-  3. Creates data/llm_data/claude-code/<hostname>/
+  1. Prompts for a human-readable name for this machine (defaults to a
+     normalized socket.gethostname()), writes it as CLAUDE_CODE_HOST in .env
+  2. Adds Stop + SessionEnd hooks to ~/.claude/settings.json (with backup)
+  3. Upserts CLAUDE_CODE_SOURCES=<host>=<archive-path> in .env
+  4. Creates data/llm_data/claude-code/<host>/
 
 Usage:
   python3 migrations/002_setup_claude_code_archival.py
-  python3 migrations/002_setup_claude_code_archival.py --yes   # skip prompt
+  python3 migrations/002_setup_claude_code_archival.py --yes   # skip prompts
 
 To uninstall: delete the Stop and SessionEnd entries pointing at
 claude_code_hook.py in ~/.claude/settings.json, and unset
-CLAUDE_CODE_SOURCES in .env.
+CLAUDE_CODE_HOST and CLAUDE_CODE_SOURCES in .env.
 """
 
 from __future__ import annotations
@@ -41,7 +43,18 @@ RESET = "\033[0m"
 
 REPO_MARKER = "claude_code_hook.py"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-CLAUDE_CODE_SOURCES_ENV_KEY = "CLAUDE_CODE_SOURCES"
+
+# Resolve the repo root early so we can import the shared paths helpers
+# without each helper site repeating the sys.path dance.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+from paths import (  # noqa: E402
+    CLAUDE_CODE_HOST_ENV_KEY,
+    CLAUDE_CODE_SOURCES_ENV_KEY,
+    load_env_file,
+    normalize_hostname,
+    parse_sources_string,
+)
 
 
 def find_repo_root() -> Path | None:
@@ -84,20 +97,45 @@ def add_hook(settings: dict, event: str, command: str) -> None:
     event_list.append({"hooks": [{"type": "command", "command": command}]})
 
 
-def parse_sources_value(raw: str) -> list[tuple[str, str]]:
-    """Parse a raw CLAUDE_CODE_SOURCES value into [(host, path), ...]."""
-    out = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry or "=" not in entry:
-            continue
-        host, path = entry.split("=", 1)
-        out.append((host.strip(), path.strip()))
-    return out
-
-
 def serialize_sources(pairs: list[tuple[str, str]]) -> str:
     return ",".join(f"{h}={p}" for h, p in pairs)
+
+
+def upsert_env_scalar(env_path: Path, key: str, value: str) -> str:
+    """Add or update a scalar KEY=VALUE in env_path.
+
+    Returns one of: "added", "updated", "unchanged".
+    """
+    existing_lines = (
+        env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    )
+    new_lines: list[str] = []
+    found = False
+    status = "added"
+    prefix = f"{key}="
+    commented_prefix = f"#{key}="
+
+    for line in existing_lines:
+        stripped = line.strip()
+        if stripped.startswith(prefix) or stripped.startswith(commented_prefix):
+            found = True
+            current = stripped.split("=", 1)[1] if "=" in stripped else ""
+            if current == value and not stripped.startswith("#"):
+                status = "unchanged"
+                new_lines.append(line)
+                continue
+            new_lines.append(f"{prefix}{value}")
+            status = "updated" if not stripped.startswith("#") else "added"
+        else:
+            new_lines.append(line)
+
+    if not found:
+        if new_lines and new_lines[-1].strip() != "":
+            new_lines.append("")
+        new_lines.append(f"{prefix}{value}")
+
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return status
 
 
 def upsert_env_sources(env_path: Path, hostname: str, archive_path: str) -> str:
@@ -105,7 +143,9 @@ def upsert_env_sources(env_path: Path, hostname: str, archive_path: str) -> str:
     Add or update the entry for hostname in CLAUDE_CODE_SOURCES.
     Returns one of: "added", "updated", "unchanged".
     """
-    existing_lines = env_path.read_text().splitlines() if env_path.exists() else []
+    existing_lines = (
+        env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    )
     new_lines = []
     found = False
     status = "added"
@@ -118,7 +158,7 @@ def upsert_env_sources(env_path: Path, hostname: str, archive_path: str) -> str:
             found = True
             # Re-parse value (strip leading '#' if commented out)
             raw_value = stripped.split("=", 1)[1] if "=" in stripped else ""
-            pairs = parse_sources_value(raw_value)
+            pairs = parse_sources_string(raw_value)
             host_to_path = {h: p for h, p in pairs}
 
             if host_to_path.get(hostname) == archive_path and not stripped.startswith("#"):
@@ -138,7 +178,7 @@ def upsert_env_sources(env_path: Path, hostname: str, archive_path: str) -> str:
             new_lines.append("")
         new_lines.append(f"CLAUDE_CODE_SOURCES={hostname}={archive_path}")
 
-    env_path.write_text("\n".join(new_lines) + "\n")
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     return status
 
 
@@ -228,13 +268,35 @@ def main():
         print(f"  Looked for {REPO_MARKER} starting from {Path(__file__).resolve().parent}.")
         sys.exit(1)
 
-    hostname = socket.gethostname()
+    env_path = repo_root / ".env"
+    existing_env = load_env_file(env_path)
+
+    # Resolve the human-readable host name. Prefer an existing CLAUDE_CODE_HOST
+    # entry so re-running the migration is idempotent. Otherwise prompt the
+    # user, defaulting to a normalized gethostname() (lowercased, .local
+    # stripped). The override exists because macOS hostnames flip around with
+    # network conditions; a hand-picked name is stable and human-readable.
+    raw_host = socket.gethostname()
+    default_host = normalize_hostname(raw_host) or raw_host
+    existing_host = existing_env.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip()
+    if existing_host:
+        hostname = existing_host
+    elif args.yes:
+        hostname = default_host
+    else:
+        prompt = (
+            f"\nWhat name do you want to give this machine?\n"
+            f"  (used to tag search results and pick this host's archive dir)\n"
+            f"  [default: {CYAN}{default_host}{RESET}] "
+        )
+        answer = input(prompt).strip()
+        hostname = answer or default_host
+
     archive_dir = repo_root / "data" / "llm_data" / "claude-code" / hostname
     command = hook_command(repo_root)
-    env_path = repo_root / ".env"
 
-    print(f"  Repository root:  {CYAN}{repo_root}{RESET}")
-    print(f"  Hostname:         {CYAN}{hostname}{RESET}")
+    print(f"\n  Repository root:  {CYAN}{repo_root}{RESET}")
+    print(f"  Host name:        {CYAN}{hostname}{RESET}")
     print(f"  Archive path:     {CYAN}{archive_dir}{RESET}")
     print(f"  Hook command:     {CYAN}{command}{RESET}")
     print(f"  Settings file:    {CYAN}{SETTINGS_PATH}{RESET}")
@@ -265,14 +327,10 @@ def main():
         print(f"  {GREEN}+{RESET} Add SessionEnd hook → {command}")
 
     # Compute env change preview without writing
-    raw_existing = ""
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            s = line.strip()
-            if s.startswith("CLAUDE_CODE_SOURCES="):
-                raw_existing = s.split("=", 1)[1]
-                break
-    existing_pairs = dict(parse_sources_value(raw_existing))
+    existing_pairs = dict(
+        parse_sources_string(existing_env.get(CLAUDE_CODE_SOURCES_ENV_KEY, ""))
+    )
+    raw_existing = existing_env.get(CLAUDE_CODE_SOURCES_ENV_KEY, "")
 
     # Collision guard: another machine already registered this hostname with
     # a different archive path. Common when default macOS hostnames like
@@ -317,13 +375,30 @@ def main():
         env_action = "create"
         print(f"  {GREEN}+{RESET} .env CLAUDE_CODE_SOURCES={hostname}={archive_dir}")
 
+    if existing_host == hostname:
+        host_action = "unchanged"
+        print(f"  {DIM}.env CLAUDE_CODE_HOST already set to {hostname} — skip{RESET}")
+    elif existing_host:
+        host_action = "update"
+        print(
+            f"  {YELLOW}~{RESET} .env CLAUDE_CODE_HOST: {existing_host} → {hostname}"
+        )
+    else:
+        host_action = "add"
+        print(f"  {GREEN}+{RESET} .env CLAUDE_CODE_HOST={hostname}")
+
     archive_dir_exists = archive_dir.exists()
     if archive_dir_exists:
         print(f"  {DIM}Archive dir already exists — skip mkdir{RESET}")
     else:
         print(f"  {GREEN}+{RESET} mkdir -p {archive_dir}")
 
-    if not settings_changes_needed and env_action == "unchanged" and archive_dir_exists:
+    if (
+        not settings_changes_needed
+        and env_action == "unchanged"
+        and host_action == "unchanged"
+        and archive_dir_exists
+    ):
         print(f"\n{GREEN}✓ Already installed — nothing to do.{RESET}\n")
         sys.exit(0)
 
@@ -354,8 +429,12 @@ def main():
         print(f"  {GREEN}✓{RESET} Updated {SETTINGS_PATH}")
 
     # 2. .env
-    if env_action != "unchanged":
+    if env_action != "unchanged" or host_action != "unchanged":
         env_path.touch(exist_ok=True)
+    if host_action != "unchanged":
+        result = upsert_env_scalar(env_path, CLAUDE_CODE_HOST_ENV_KEY, hostname)
+        print(f"  {GREEN}✓{RESET} .env CLAUDE_CODE_HOST: {result}")
+    if env_action != "unchanged":
         result = upsert_env_sources(env_path, hostname, str(archive_dir))
         print(f"  {GREEN}✓{RESET} .env CLAUDE_CODE_SOURCES: {result}")
 
@@ -366,7 +445,6 @@ def main():
 
     # 4. Optional backfill of existing ~/.claude/projects/ history.
     #    Uses the same sync code as the runtime hook so behavior matches.
-    sys.path.insert(0, str(repo_root))
     import claude_code_hook as cch  # noqa: E402
 
     projects_dir = cch.CLAUDE_PROJECTS_DIR
@@ -433,7 +511,8 @@ def main():
 
   {BOLD}To uninstall:{RESET}
     Delete the Stop and SessionEnd entries pointing at {REPO_MARKER}
-    in {SETTINGS_PATH}, and unset CLAUDE_CODE_SOURCES in .env.
+    in {SETTINGS_PATH}, and unset CLAUDE_CODE_HOST and
+    CLAUDE_CODE_SOURCES in .env.
 """)
 
 

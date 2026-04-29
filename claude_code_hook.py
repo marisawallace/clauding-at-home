@@ -30,14 +30,18 @@ from __future__ import annotations
 
 import fcntl
 import json
-import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
-from paths import CLAUDE_CODE_SOURCES_ENV_KEY, parse_claude_code_sources  # noqa: E402
+from paths import (  # noqa: E402
+    CLAUDE_CODE_SOURCES_ENV_KEY,
+    load_env_file,
+    parse_claude_code_sources,
+    resolve_host_name,
+)
 
 CLAUDE_DIR = Path.home() / ".claude"
 CLAUDE_PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -45,34 +49,25 @@ ANOMALY_LOG = REPO_ROOT / "claude_code_anomalies.log"
 ENV_FILE = REPO_ROOT / ".env"
 
 
-def load_env(env_path: Path) -> dict:
-    config = {}
-    if not env_path.exists():
-        return config
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        config[key.strip()] = value.strip()
-    return config
-
-
 def resolve_archive_dir() -> Path:
-    """Return the archive path for the current hostname from CLAUDE_CODE_SOURCES."""
-    config = load_env(ENV_FILE)
+    """Return the archive path for this machine from CLAUDE_CODE_SOURCES.
+
+    The host key is read from CLAUDE_CODE_HOST if set, else falls back to a
+    normalized socket.gethostname().
+    """
+    config = load_env_file(ENV_FILE)
     sources = parse_claude_code_sources(config)
     if not sources:
         raise RuntimeError(
             f"{CLAUDE_CODE_SOURCES_ENV_KEY} is not set in {ENV_FILE}. "
             f"Run `python migrations/002_setup_claude_code_archival.py` to configure."
         )
-    host = socket.gethostname()
+    host = resolve_host_name(config)
     for entry_host, path in sources:
         if entry_host == host:
             return path
     raise RuntimeError(
-        f"No entry for hostname {host!r} in {CLAUDE_CODE_SOURCES_ENV_KEY}. "
+        f"No entry for host {host!r} in {CLAUDE_CODE_SOURCES_ENV_KEY}. "
         f"Run `python migrations/002_setup_claude_code_archival.py` on this machine."
     )
 
