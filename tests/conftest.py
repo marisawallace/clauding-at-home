@@ -202,28 +202,47 @@ def sample_chatgpt_export(tmp_path):
         "phone_number": None
     }
 
-    # ChatGPT conversations in new format
+    # ChatGPT conversations in real export format (mapping of nodes; root has
+    # message: None; each child carries message.content.parts).
     conversations_data = [
         {
             "id": "chatgpt-conv-uuid-001",
             "title": "ChatGPT Test Conversation",
             "create_time": 1704103200.0,  # 2025-01-01T10:00:00Z
             "update_time": 1704106800.0,  # 2025-01-01T11:00:00Z
-            "mapping": {},
-            "chat_messages": [
-                {
-                    "uuid": "chatgpt-msg-001",
-                    "text": "What is ChatGPT?",
-                    "sender": "human",
-                    "created_at": "2025-01-01T10:00:00.000000Z"
+            "mapping": {
+                "root": {
+                    "id": "root",
+                    "message": None,
+                    "parent": None,
+                    "children": ["a"],
                 },
-                {
-                    "uuid": "chatgpt-msg-002",
-                    "text": "ChatGPT is an AI assistant.",
-                    "sender": "assistant",
-                    "created_at": "2025-01-01T10:01:00.000000Z"
-                }
-            ]
+                "a": {
+                    "id": "a",
+                    "message": {
+                        "id": "a",
+                        "author": {"role": "user"},
+                        "create_time": 1704103200.0,
+                        "content": {"content_type": "text", "parts": ["What is ChatGPT?"]},
+                    },
+                    "parent": "root",
+                    "children": ["b"],
+                },
+                "b": {
+                    "id": "b",
+                    "message": {
+                        "id": "b",
+                        "author": {"role": "assistant"},
+                        "create_time": 1704103260.0,
+                        "content": {
+                            "content_type": "text",
+                            "parts": ["ChatGPT is an AI assistant trained by OpenAI."],
+                        },
+                    },
+                    "parent": "a",
+                    "children": [],
+                },
+            },
         }
     ]
 

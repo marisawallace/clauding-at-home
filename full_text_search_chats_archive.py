@@ -178,6 +178,41 @@ def extract_text_from_conversation(data: dict) -> List[str]:
     return texts
 
 
+def extract_text_from_chatgpt_conversation(data: dict) -> List[str]:
+    """Extract all text content from a ChatGPT conversation (mapping format)."""
+    texts = []
+
+    # Top-level title (canonical) and name (added by our sync normalizer)
+    if data.get("title"):
+        texts.append(data["title"])
+    if data.get("name") and data.get("name") != data.get("title"):
+        texts.append(data["name"])
+    if data.get("summary"):
+        texts.append(data["summary"])
+
+    mapping = data.get("mapping", {})
+    if not isinstance(mapping, dict):
+        return texts
+
+    for node in mapping.values():
+        if not isinstance(node, dict):
+            continue
+        message = node.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, dict):
+            continue
+        # text and multimodal_text both use a `parts` list. parts entries can be
+        # strings (text) or dicts (e.g. image references) — keep only strings.
+        if content.get("content_type") in ("text", "multimodal_text"):
+            for part in content.get("parts", []) or []:
+                if isinstance(part, str) and part:
+                    texts.append(part)
+
+    return texts
+
+
 def extract_text_from_project(data: dict) -> List[str]:
     """Extract all text content from a project."""
     texts = []
@@ -263,9 +298,12 @@ def search_item(filepath: Path, query: str, item_type: str, email: str, provider
         print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
         return None
 
-    # Extract text based on type
+    # Extract text based on type and provider
     if item_type == "conversation":
-        texts = extract_text_from_conversation(data)
+        if provider == "chatgpt":
+            texts = extract_text_from_chatgpt_conversation(data)
+        else:
+            texts = extract_text_from_conversation(data)
     else:  # project
         texts = extract_text_from_project(data)
 

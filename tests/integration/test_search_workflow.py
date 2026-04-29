@@ -157,6 +157,45 @@ def test_search_cross_provider(isolated_workspace, sample_claude_export, sample_
 
 
 @pytest.mark.integration
+def test_search_finds_chatgpt_message_body(isolated_workspace, sample_chatgpt_export,
+                                            test_env_file, repo_root):
+    """Search must index ChatGPT message bodies (mapping format), not just titles.
+
+    Regression: ChatGPT exports use a `mapping` of nodes with
+    message.content.parts; the original extractor only walked Claude's
+    chat_messages array, so message text was invisible to search.
+    """
+    chatgpt_zip = isolated_workspace / sample_chatgpt_export.name
+    shutil.copy(sample_chatgpt_export, chatgpt_zip)
+
+    sync_chatgpt = subprocess.run(
+        [sys.executable, str(repo_root / "sync_local_chats_archive.py"), "--chatgpt"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True,
+    )
+    assert sync_chatgpt.returncode == 0, sync_chatgpt.stderr
+
+    # "trained by OpenAI" appears only inside the assistant message parts —
+    # NOT in the title. If the extractor ignores `mapping`, this finds nothing.
+    result = subprocess.run(
+        [sys.executable, str(repo_root / "full_text_search_chats_archive.py"),
+         "-e", "trained by OpenAI", "-j"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    search_results = json.loads(result.stdout)
+    chatgpt_hits = [r for r in search_results if "/chatgpt/" in r.get("filepath", "")]
+    assert len(chatgpt_hits) > 0, (
+        "Expected to find the phrase inside a ChatGPT message body. "
+        f"Got: {search_results}"
+    )
+
+
+@pytest.mark.integration
 def test_search_no_results(isolated_workspace, sample_claude_export, repo_root, test_env_file):
     """Test search with query that has no matches."""
     # Setup: Import conversations
