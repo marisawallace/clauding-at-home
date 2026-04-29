@@ -26,6 +26,8 @@ ever changes, archives could diverge. Truncation detection writes to
 claude_code_anomalies.log as a canary for this assumption.
 """
 
+from __future__ import annotations
+
 import fcntl
 import json
 import socket
@@ -47,7 +49,7 @@ def load_env(env_path: Path) -> dict:
     config = {}
     if not env_path.exists():
         return config
-    for line in env_path.read_text().splitlines():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -105,9 +107,19 @@ def sync_transcript(transcript_path: Path, archive_path: Path) -> int:
     if not transcript_path.exists():
         return 0
 
+    # Cheap shortcut: if the archive exists and is at least as large as the
+    # source, there can be no new bytes to append. Skips the read+line-count
+    # entirely on every Stop where nothing changed.
+    if archive_path.exists():
+        try:
+            if archive_path.stat().st_size >= transcript_path.stat().st_size:
+                return 0
+        except OSError:
+            pass  # fall through to the full sync path
+
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(archive_path, "a+") as f:
+    with open(archive_path, "a+", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             f.seek(0)
@@ -115,7 +127,7 @@ def sync_transcript(transcript_path: Path, archive_path: Path) -> int:
 
             source_lines = []
             source_total = 0
-            with open(transcript_path, "r") as src:
+            with open(transcript_path, "r", encoding="utf-8") as src:
                 for i, line in enumerate(src):
                     if not line.endswith("\n"):
                         # Incomplete line — writer hasn't flushed. Defer to next sync.
@@ -179,10 +191,13 @@ def _log_anomaly(message: str) -> None:
     entry = f"[{timestamp}] {message}\n"
     print(f"ANOMALY: {message}", file=sys.stderr)
     try:
-        with open(ANOMALY_LOG, "a") as f:
+        with open(ANOMALY_LOG, "a", encoding="utf-8") as f:
             f.write(entry)
-    except OSError:
-        pass
+    except OSError as e:
+        # Fall back to stderr if the log file can't be written (read-only repo,
+        # permissions, missing parent dir, etc.). The ANOMALY line above still
+        # carries the message; this just notes the log failure for visibility.
+        print(f"  (could not write {ANOMALY_LOG}: {e})", file=sys.stderr)
 
 
 def main():

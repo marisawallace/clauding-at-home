@@ -10,7 +10,7 @@ import argparse
 import html
 import json
 import os
-
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -366,7 +366,8 @@ def claude_code_to_markdown(filepath: Path) -> str:
         parts.append(f"**Branch:** `{metadata['git_branch']}`  ")
     parts.append(f"**Created:** {format_timestamp(metadata['created_at'])}  ")
     parts.append(f"**Updated:** {format_timestamp(metadata['updated_at'])}  ")
-    parts.append(f"**Resume:** `cd {metadata['cwd']} && claude -r {metadata['session_id']}`  ")
+    resume_cmd = f"cd {shlex.quote(metadata['cwd'])} && claude -r {metadata['session_id']}"
+    parts.append(f"**Resume:** `{resume_cmd}`  ")
     parts.append("\n---\n")
 
     # Conversation turns

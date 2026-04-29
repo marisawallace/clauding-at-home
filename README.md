@@ -101,11 +101,15 @@ That migration will:
   timestamped backup) pointing at `claude_code_hook.py` in this repo.
 - Write `CLAUDE_CODE_SOURCES=<hostname>=<absolute-archive-path>` to `.env`.
 - Create `data/llm_data/claude-code/<hostname>/` as the archive root.
+- Optionally, prompt to backfill any existing `~/.claude/projects/`
+  transcripts into the archive in one shot (with size + progress) so the
+  first real session doesn't pay that cost.
 
 After that, every time a Claude Code session ends, the hook reconciles
 `~/.claude/projects/*.jsonl` into the archive (append-only, idempotent).
-**On the first `SessionEnd` after setup, all existing on-disk Claude Code
-history backfills automatically** — no manual import step.
+If you skip the optional backfill, the next `SessionEnd` will sweep any
+existing history in — that first sweep blocks Claude Code's exit, so it
+can feel slow if your history is large.
 
 To verify: open and exit any Claude Code session, then search for something
 you said in it:

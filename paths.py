@@ -14,6 +14,8 @@ Any of these can be overridden via .env:
   ARCHIVED_EXPORTS_DIR=/absolute/path/to/archived_exports
   LOCAL_VIEWS_DIR=/absolute/path/to/local_views
 """
+from __future__ import annotations
+
 from pathlib import Path
 
 # Single sync root - everything lives under here
@@ -26,10 +28,16 @@ LOCAL_VIEWS_SUBDIR = DATA_ROOT / "local_views"
 
 # External data sources for Claude Code conversations (JSONL archives).
 # Configured via CLAUDE_CODE_SOURCES in .env as comma-separated host=path
-# pairs, e.g. "laptop=~/syncs/cc/laptop,desktop=~/syncs/cc/desktop". Each
-# path points at a per-machine ~/.claude/projects/ tree synced into a shared
-# location. The host label is stamped onto search results so the resume
-# command can be attributed to the originating machine.
+# pairs, e.g. "laptop=/Users/me/cah/data/llm_data/claude-code/laptop,
+# desktop=/Users/me/cah/data/llm_data/claude-code/desktop".
+#
+# Each path is the archive root for one machine. They live on local disk
+# (typically under this repo's data/ tree); cloud-syncing the whole repo
+# with MEGA / Dropbox / Syncthing is fine and is how multi-machine search
+# works — every host writes to its *own* subdirectory, so the file-level
+# locking the hook does only ever needs to coordinate writers on one host.
+# The host label is stamped onto search results so the resume command can
+# be attributed to the originating machine.
 CLAUDE_CODE_SOURCES_ENV_KEY = "CLAUDE_CODE_SOURCES"
 
 

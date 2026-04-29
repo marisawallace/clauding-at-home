@@ -20,8 +20,11 @@ claude_code_hook.py in ~/.claude/settings.json, and unset
 CLAUDE_CODE_SOURCES in .env.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
+import shlex
 import socket
 import sys
 from datetime import datetime, timezone
@@ -38,6 +41,7 @@ RESET = "\033[0m"
 
 REPO_MARKER = "claude_code_hook.py"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+CLAUDE_CODE_SOURCES_ENV_KEY = "CLAUDE_CODE_SOURCES"
 
 
 def find_repo_root() -> Path | None:
@@ -51,7 +55,14 @@ def find_repo_root() -> Path | None:
 
 
 def hook_command(repo_root: Path) -> str:
-    return f"python3 {repo_root / REPO_MARKER}"
+    """Build the hook command line.
+
+    Uses sys.executable (the interpreter that ran the migration) rather than
+    bare `python3`, since hooks are spawned by Claude Code with whatever PATH
+    it inherited — which may not include pyenv/asdf/brew shims. Both the
+    interpreter and script path are shell-quoted so paths with spaces work.
+    """
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(repo_root / REPO_MARKER))}"
 
 
 def settings_already_installed(settings: dict, command: str) -> tuple[bool, bool]:
@@ -131,6 +142,73 @@ def upsert_env_sources(env_path: Path, hostname: str, archive_path: str) -> str:
     return status
 
 
+def _human_bytes(n: float) -> str:
+    """Format a byte count like '1.4 GB' or '312 KB'."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+        n /= 1024
+    return f"{n} B"
+
+
+def _prompt_yn(question: str, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input(f"{question} {suffix} ").strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def _run_backfill(cch, jsonls: list, archive_dir: Path) -> None:
+    """Walk every JSONL through the hook's sync_transcript and report progress."""
+    total = len(jsonls)
+    new_lines_total = 0
+    files_changed = 0
+    bytes_done = 0
+    bytes_total = sum(
+        (j.stat().st_size if j.exists() else 0) for j in jsonls
+    )
+
+    print(f"\n{BOLD}Backfilling...{RESET}")
+    for i, jsonl in enumerate(jsonls, 1):
+        try:
+            cch.validate_source_path(jsonl)
+            archive_path = cch.get_archive_path(jsonl, archive_dir)
+        except ValueError as e:
+            print(f"  {YELLOW}skip{RESET} {jsonl.name}: {e}")
+            continue
+
+        try:
+            new_lines = cch.sync_transcript(jsonl, archive_path)
+        except OSError as e:
+            print(f"  {YELLOW}skip{RESET} {jsonl.name}: {e}")
+            continue
+
+        try:
+            bytes_done += jsonl.stat().st_size
+        except OSError:
+            pass
+
+        if new_lines > 0:
+            files_changed += 1
+            new_lines_total += new_lines
+
+        # Single-line progress: file count, percentage of total bytes.
+        pct = (bytes_done / bytes_total * 100) if bytes_total else 100
+        print(
+            f"  [{i}/{total}] {pct:5.1f}%  "
+            f"{_human_bytes(bytes_done)} / {_human_bytes(bytes_total)}",
+            end="\r",
+            flush=True,
+        )
+
+    print()  # finish the progress line
+    print(
+        f"  {GREEN}✓{RESET} Backfill complete: "
+        f"{new_lines_total} new line(s) across {files_changed} file(s)."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Migration 002: Set up Claude Code session archival",
@@ -195,6 +273,34 @@ def main():
                 raw_existing = s.split("=", 1)[1]
                 break
     existing_pairs = dict(parse_sources_value(raw_existing))
+
+    # Collision guard: another machine already registered this hostname with
+    # a different archive path. Common when default macOS hostnames like
+    # "MacBook-Pro.local" collide across users sharing the repo. Refuse to
+    # silently repoint the other host's hook.
+    if (
+        hostname in existing_pairs
+        and existing_pairs[hostname] != str(archive_dir)
+    ):
+        prior_path = existing_pairs[hostname]
+        prior_exists = Path(prior_path).exists()
+        if prior_exists:
+            print(
+                f"\n{RED}ERROR: hostname collision in {CLAUDE_CODE_SOURCES_ENV_KEY}.{RESET}"
+            )
+            print(
+                f"  An entry for {CYAN}{hostname}{RESET} already points at:\n"
+                f"    {CYAN}{prior_path}{RESET}\n"
+                f"  which exists on disk and may belong to a different machine."
+            )
+            print(
+                f"  Refusing to overwrite. If this *is* the same machine and the\n"
+                f"  archive moved, edit {env_path} manually. If it's a different\n"
+                f"  machine that happens to share this hostname, give one of them\n"
+                f"  a unique name first (e.g. rename the host)."
+            )
+            sys.exit(1)
+
     if existing_pairs.get(hostname) == str(archive_dir):
         env_action = "unchanged"
         print(f"  {DIM}.env CLAUDE_CODE_SOURCES already has {hostname}={archive_dir} — skip{RESET}")
@@ -258,6 +364,41 @@ def main():
         archive_dir.mkdir(parents=True, exist_ok=True)
         print(f"  {GREEN}✓{RESET} Created {archive_dir}")
 
+    # 4. Optional backfill of existing ~/.claude/projects/ history.
+    #    Uses the same sync code as the runtime hook so behavior matches.
+    sys.path.insert(0, str(repo_root))
+    import claude_code_hook as cch  # noqa: E402
+
+    projects_dir = cch.CLAUDE_PROJECTS_DIR
+    if projects_dir.exists():
+        jsonls = list(projects_dir.rglob("*.jsonl"))
+        total_bytes = 0
+        for j in jsonls:
+            try:
+                total_bytes += j.stat().st_size
+            except OSError:
+                pass
+
+        if jsonls:
+            size_str = _human_bytes(total_bytes)
+            print(
+                f"\n{BOLD}Backfill existing Claude Code history?{RESET}\n"
+                f"  Found {CYAN}{len(jsonls)}{RESET} JSONL file(s) "
+                f"under {CYAN}{projects_dir}{RESET} ({CYAN}{size_str}{RESET}).\n"
+                f"  Importing now is faster than letting it happen on the\n"
+                f"  first SessionEnd (which would block Claude Code's exit).\n"
+                f"  Skip safely — the next SessionEnd will sweep these in."
+            )
+            do_backfill = args.yes or _prompt_yn("Run backfill now?", default=True)
+            if do_backfill:
+                _run_backfill(cch, jsonls, archive_dir)
+        else:
+            print(f"\n{DIM}No existing JSONL transcripts to backfill.{RESET}")
+    else:
+        print(
+            f"\n{DIM}{projects_dir} does not exist yet — skipping backfill.{RESET}"
+        )
+
     # Done
     print(f"\n{BOLD}{'=' * 60}{RESET}")
     print(f"{GREEN}{BOLD}  Setup complete!{RESET}")
@@ -283,8 +424,10 @@ def main():
 
   {BOLD}Verify it's working:{RESET}
     1. Open and exit any Claude Code session.
-       (On the first SessionEnd, all your existing on-disk history will
-       backfill into the archive in one sweep — no manual import step.)
+       (If you skipped the optional backfill above, the next SessionEnd will
+       sweep any existing history into the archive — that first sweep can be
+       slow if your ~/.claude/projects/ tree is large, since it blocks
+       Claude Code's exit.)
     2. {CYAN}python3 full_text_search_chats_archive.py <some query>{RESET}
        Results from this machine will be tagged with hostname {CYAN}{hostname}{RESET}.
 

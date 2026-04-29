@@ -8,6 +8,8 @@ searchable text, metadata, and structured conversation turns from those files.
 Shared by full_text_search_chats_archive.py and view_conversation.py.
 """
 
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
@@ -61,17 +63,20 @@ def extract_session_metadata(lines: list[dict]) -> dict:
 
     session_id = ""
     cwd = ""
-    git_branch = None
+    git_branch = ""
 
-    # Get session_id and cwd from first available line with those fields
+    # Get session_id, cwd, and gitBranch from the first line that has each.
+    # gitBranch is optional (empty for non-repo cwds), so we stop as soon as
+    # session_id and cwd are populated rather than waiting for a branch that
+    # may never appear.
     for line in lines:
         if not session_id and line.get("sessionId"):
             session_id = line["sessionId"]
         if not cwd and line.get("cwd"):
             cwd = line["cwd"]
-        if git_branch is None and line.get("gitBranch"):
+        if not git_branch and line.get("gitBranch"):
             git_branch = line["gitBranch"]
-        if session_id and cwd and git_branch is not None:
+        if session_id and cwd:
             break
 
     created_at = first_prompt.get("timestamp", "") if first_prompt else ""
@@ -82,7 +87,7 @@ def extract_session_metadata(lines: list[dict]) -> dict:
     return {
         "session_id": session_id,
         "cwd": cwd,
-        "git_branch": git_branch or "",
+        "git_branch": git_branch,
         "created_at": created_at,
         "updated_at": updated_at,
         "name": name,

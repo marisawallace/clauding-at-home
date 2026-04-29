@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -89,7 +90,7 @@ class SearchResult:
             cwd = extra.get("cwd", "~")
             host = extra.get("host", "")
             prefix = f"[{host}] " if host else ""
-            return f"{prefix}cd {cwd} && claude -r {self.uuid}"
+            return f"{prefix}cd {shlex.quote(cwd)} && claude -r {self.uuid}"
         else:
             return f"Unknown provider: {self.provider}"
 
@@ -478,7 +479,7 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
             host = extra.get("host", "")
             host_suffix = f" | {host}" if host else ""
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}{host_suffix}{Colors.RESET}")
-            print(f"{Colors.ORANGE}cd {cwd} && claude -r {result.uuid}{Colors.RESET}")
+            print(f"{Colors.ORANGE}cd {shlex.quote(cwd)} && claude -r {result.uuid}{Colors.RESET}")
         else:
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
             print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
