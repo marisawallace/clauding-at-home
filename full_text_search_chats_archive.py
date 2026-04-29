@@ -506,7 +506,13 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
             type_label = "CLAUDE CODE"
             type_color = Colors.ORANGE
 
-        print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
+        if result.provider == "chatgpt":
+            type_label = "CHATGPT"
+
+        if result.provider == "claude":
+            type_label = "CLAUDE.AI"
+
+        print(f"{Colors.BOLD}{type_color}{type_label}{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
         # Skip the UUID line for claude-code results: the UUID is already visible
         # (and easy to copy) in the `claude -r <uuid>` resume command printed below.
         if result.provider != "claude-code":
