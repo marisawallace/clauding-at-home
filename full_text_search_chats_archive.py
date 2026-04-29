@@ -513,6 +513,9 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False, 
         if result.provider == "claude":
             type_label = "CLAUDE.AI"
 
+        if result.provider == "gemini":
+            type_label = "GEMINI"
+
         print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
         # Skip the UUID line for claude-code results: the UUID is already visible
         # (and easy to copy) in the `claude -r <uuid>` resume command printed below.
@@ -529,20 +532,21 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False, 
             resume_color = Colors.ORANGE
             if current_host and host and host != current_host:
                 resume_color = Colors.DIM
-            print(f"{resume_color}cd {shlex.quote(cwd)} && claude -r {result.uuid}{Colors.RESET}")
+            print(f"{resume_color}pushd {shlex.quote(cwd)} && claude -r {result.uuid}{Colors.RESET}")
         else:
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
             print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
         print(f"{Colors.DIM}Score: {result.total_score:.1f} | Matches: {len(result.matches)}{Colors.RESET}")
 
-        # Show matches (up to 5)
+        # Show matches (up to 3)
+        ceil_matches_to_show = 2
         print()
-        for j, match in enumerate(result.matches[:5], 1):
+        for j, match in enumerate(result.matches[:ceil_matches_to_show], 1):
             highlighted = highlight_query(match.text, query, exact=exact)
             print(f"  {Colors.DIM}{j}.{Colors.RESET} {highlighted}")
 
-        if len(result.matches) > 5:
-            remaining = len(result.matches) - 5
+        if len(result.matches) > ceil_matches_to_show:
+            remaining = len(result.matches) - ceil_matches_to_show
             print(f"  {Colors.DIM}... and {remaining} more match(es){Colors.RESET}")
 
         print()
@@ -751,6 +755,9 @@ Examples:
     # Re-sort by updated date then score if requested (most recent at bottom)
     if args.time_sort:
         results.sort(key=lambda r: (r.updated_at, r.total_score), reverse=True)
+
+    import demo_mode
+    results = demo_mode.maybe_apply(results, config) # No-op unless DEMO_* env vars are set.
 
     # Output results
     if args.json:
