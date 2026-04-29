@@ -83,7 +83,8 @@ The sync script includes multiple safety mechanisms:
 
 Then everything should just work!
 
-### Claude Code
+
+#### Claude Code
 
 Writes a JSONL transcript per session under `~/.claude/projects/`. By default, these are local to your machine-- not synced to the cloud.
 
