@@ -4,11 +4,9 @@ I wanted offline full-text search and ownership over *all* my LLM chats. So I ma
 
 ## Features
 
-- **Multi-provider**: currently Claude, ChatGPT, and Claude Code.
+- **Multi-provider**: Claude, ChatGPT, Claude Code.
 - **Multi-account** per provider.
 - **Smart search ranking**
-- **Hyperlinks in the results**: easy resume when you've found *that chat*
-- **JSON output** supported when searching
 - **Local view**: copy chats to Markdown or HTML, open in `$EDITOR`
 - **Non-destructive sync**: preserves a chat even if you deleted it on the website. Export/sync the last 30 days only and it'll preserve your older chats. 
 - **Export backup**: automatic archive of your data export zipfiles
@@ -31,6 +29,9 @@ cat > .env << 'EOF'
 # Where to search for export zip files (optional, defaults to current directory)
 ZIP_SEARCH_DIR=~/Downloads
 EOF
+
+# Claude Code setup -- more on this below:
+python3 migrations/002_setup_claude_code_archival.py
 ```
 
 I highly recommend adding aliases to your `.bashrc` or equivalent.
@@ -108,16 +109,11 @@ The line-count-based sync depends on this. If this changes, archives could diver
 ## Usage (if you set up based aliases)
 
 ```
-# Search
+# Enter to resume, v to open in `$EDITOR`
+# q, Esc, or Ctrl-C to exit
 cs "hi claude"
 
-# View (copy/paste the UUID from the search results)
-# This will open that conversation in a persistent markdown file.
-# You can edit this file without destroying any of the original
-# export data.
-csv UUID
-
-# Directly open the top 3 results for "books" in your `$EDITOR`
+# Open the top 3 results for "books" in `$EDITOR`
 cs books -o 3
 
 # JSON output
@@ -165,13 +161,12 @@ clauding-at-home/
 │       └── chatgpt/
 │           ├── {uuid}.md
 │           └── {uuid}.html
-├── migrations/                     # One-time data migration scripts
+├── migrations/                     # Idempotent!
 │   ├── 001_consolidate_data_dirs.py
 │   └── 002_setup_claude_code_archival.py
 ├── sync_local_chats_archive.py     # Import and sync exports
 ├── claude_code_hook.py             # Claude Code Stop/SessionEnd hook
-├── full_text_search_chats_archive.py  # Search conversations
-└── view_conversation.py            # View conversations as MD/HTML
+└── full_text_search_chats_archive.py  # Search conversations
 ```
 
 ## Known Limitations
@@ -190,7 +185,7 @@ This means search results may not include text from assistant responses in branc
 
 ### Home/End keys in macOS Terminal.app
 
-The interactive picker accepts Home/End to jump to the first/last result, but the stock macOS Terminal.app does not send the standard escape sequences for those keys by default — it scrolls the scrollback instead. Use `g` / `G` (vim-style aliases) to jump to the top/bottom, or switch to iTerm2 / WezTerm / Ghostty where Home/End work as expected.
+Interactive search accepts Home/End to jump to the first/last result, but the stock macOS Terminal.app does not send the standard escape sequences for those keys by default — it scrolls the scrollback instead. Use `g` / `G` (vim-style aliases) to jump to the top/bottom, or switch to iTerm2 / WezTerm / Ghostty where Home/End work as expected.
 
 
 ## Requirements

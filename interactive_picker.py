@@ -71,7 +71,7 @@ def _highlight_query(text: str, query: str, exact: bool) -> FormattedText:
     return FormattedText(out)
 
 
-def _render_result(result, query: str, exact: bool, selected: bool, current_host: str) -> tuple[FormattedText, int]:
+def _render_result(result, query: str, exact: bool, selected: bool, current_host: str, demo: bool = False) -> tuple[FormattedText, int]:
     """
     Render one result as a multi-line FormattedText block.
     Returns (fragments, line_count) so the picker can drive scroll-offset.
@@ -109,7 +109,7 @@ def _render_result(result, query: str, exact: bool, selected: bool, current_host
         meta = [("fg:#888888", f"Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}")]
         if host:
             meta.append(("fg:#888888", " | "))
-            host_style = "fg:#ff8c00" if current_host and host == current_host else "fg:#888888"
+            host_style = "fg:#ff8c00" if demo or (current_host and host == current_host) else "fg:#888888"
             meta.append((host_style, host))
         line(meta)
     else:
@@ -131,12 +131,13 @@ def _render_result(result, query: str, exact: bool, selected: bool, current_host
 
 
 class ResultPicker:
-    def __init__(self, results: list, query: str, exact: bool, current_host: str):
+    def __init__(self, results: list, query: str, exact: bool, current_host: str, demo: bool = False):
         # Best-first ordering: cursor starts on the best match.
         self.results = list(results)
         self.query = query
         self.exact = exact
         self.current_host = current_host
+        self.demo = demo
         self.index = 0
         self.action = None  # "resume" | "view" | None
         self._selected_block_height = 1
@@ -148,7 +149,7 @@ class ResultPicker:
     def _get_unselected(self, i):
         cached = self._unselected_cache[i]
         if cached is None:
-            cached = _render_result(self.results[i], self.query, self.exact, False, self.current_host)
+            cached = _render_result(self.results[i], self.query, self.exact, False, self.current_host, self.demo)
             self._unselected_cache[i] = cached
         return cached
 
@@ -157,7 +158,7 @@ class ResultPicker:
         self._selected_block_height = 1
         for i, r in enumerate(self.results):
             if i == self.index:
-                block, height = _render_result(r, self.query, self.exact, True, self.current_host)
+                block, height = _render_result(r, self.query, self.exact, True, self.current_host, self.demo)
                 self._selected_block_height = height
             else:
                 block, _ = self._get_unselected(i)
@@ -247,22 +248,20 @@ class ResultPicker:
             full_screen=True,
             mouse_support=False,
         )
-        # Default 0.05s wait after ESC (to disambiguate from arrow-key
-        # sequences like ESC[A) makes Esc feel laggy. 50ms is imperceptible
-        # on Esc and still long enough that an arrow key over SSH won't get
-        # split into a stray "exit" + bracket noise.
-        app.ttimeoutlen = 0.05
+        # Default 0.1s wait after ESC (to disambiguate from arrow-key
+        # sequences like ESC[A -- necessary for up/down nav).
+        app.ttimeoutlen = 0.1
         return app.run()
 
 
-def act_on_choice(result, current_host: str) -> int:
+def act_on_choice(result, current_host: str, demo: bool = False) -> int:
     """Take the action for the chosen result. Returns process exit code (0 on success)."""
     if result.provider == "claude-code":
         extra = result.extra or {}
         cwd = os.path.expanduser(extra.get("cwd", "~"))
         host = extra.get("host", "")
 
-        if current_host and host and host != current_host:
+        if not demo and current_host and host and host != current_host:
             # Different host — can't resume here. Print the command for the user.
             print(f"\nThis session lives on host '{host}'. Resume there with:\n", file=sys.stderr)
             print(f"  pushd {shlex.quote(cwd)} && claude -r {result.uuid}\n")
@@ -308,11 +307,11 @@ def view_choice(result) -> int:
         return 1
 
 
-def pick_and_act(results: list, query: str, exact: bool, current_host: str) -> int:
+def pick_and_act(results: list, query: str, exact: bool, current_host: str, demo: bool = False) -> int:
     if not results:
         print("No results to pick from.")
         return 0
-    picker = ResultPicker(results, query, exact, current_host)
+    picker = ResultPicker(results, query, exact, current_host, demo)
     while True:
         chosen = picker.run()
         if chosen is None:
@@ -322,4 +321,4 @@ def pick_and_act(results: list, query: str, exact: bool, current_host: str) -> i
             # Re-enter the picker so the user can keep browsing.
             continue
         # action == "resume": Enter — fire the resume/open action and exit.
-        return act_on_choice(chosen, current_host)
+        return act_on_choice(chosen, current_host, demo)

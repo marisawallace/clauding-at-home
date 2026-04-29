@@ -789,7 +789,8 @@ Examples:
             import interactive_picker
             # Best result first so the cursor starts on the strongest match.
             picker_results = sorted(results, key=lambda r: -r.total_score)
-            sys.exit(interactive_picker.pick_and_act(picker_results, args.query, args.exact, current_host))
+            demo = bool(config.get("DEMO_HOSTNAMES", "").strip())
+            sys.exit(interactive_picker.pick_and_act(picker_results, args.query, args.exact, current_host, demo))
     else:
         print_results(results, args.query, exact=args.exact, current_host=current_host)
 
