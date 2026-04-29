@@ -1,6 +1,6 @@
 ![Demo gif showing searching in the terminal](demo.gif)
 
-I wanted offline full-text search and ownership over *all* my LLM chats. I made this.
+I wanted offline full-text search and ownership over *all* my LLM chats. So I made this.
 
 ## Features
 
