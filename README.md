@@ -1,6 +1,6 @@
 ![Demo gif showing searching in the terminal](demo.gif)
 
-I wanted full-text search over *all* my LLM chats, so I made this.
+I wanted offline full-text search and ownership over *all* my LLM chats. I made this.
 
 ## Features
 
@@ -13,6 +13,7 @@ I wanted full-text search over *all* my LLM chats, so I made this.
 - **Non-destructive sync**: preserves a chat even if you deleted it on the website. Export/sync the last 30 days only and it'll preserve your older chats. 
 - **Export backup**: automatic archive of your data export zipfiles
 - **UUID tracking**: Correctly handles conversation renames
+- **Canonical**: Sync your `clauding-at-home/data/` folder across all your machines (MEGA, Dropbox, etc.). Your full LLM history travels with you.
 - **Simple**: just a folder of python scripts. Works with system python.
 - **Completely offline**
 
@@ -56,13 +57,13 @@ export EDITOR="$VISUAL"
 1. [https://claude.ai/settings/data-privacy-controls](https://claude.ai/settings/data-privacy-controls)
 2. Click "Export data"
 3. Download the .zip file
-4. `your-alias`, `csscl`, or `python3 sync_local_chats_archive.py --claude`
+4. Run `your-alias`, `csscl`, or `python3 sync_local_chats_archive.py --claude`
 
 #### ChatGPT
 1. [https://chatgpt.com/#settings/DataControls](https://chatgpt.com/#settings/DataControls)
 2. Click "Export data"
 3. Download the .zip file
-4. `your-alias`, `cssch`, or `python3 sync_local_chats_archive.py --chatgpt`
+4. Run `your-alias`, `cssch`, or `python3 sync_local_chats_archive.py --chatgpt`
 
 The sync script will:
 - Find all export zip files matching the provider's pattern
@@ -84,8 +85,7 @@ Then everything should just work!
 
 ### Claude Code
 
-[Claude Code](https://claude.com/claude-code) writes a JSONL transcript per
-session under `~/.claude/projects/`. By default, these are local to your machine, and not synced to the cloud.
+Writes a JSONL transcript per session under `~/.claude/projects/`. By default, these are local to your machine-- not synced to the cloud.
 
 `claude_code_hook.py` in this repo can archive all those sessions for search, sync, and markdown editing.
 
