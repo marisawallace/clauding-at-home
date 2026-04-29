@@ -188,6 +188,10 @@ This means search results may not include text from assistant responses in branc
 **Workarounds:**
 - Before exporting, revisit conversations with important forks and switch to each branch you care about (the export appears to capture whichever branch is active).
 
+### Home/End keys in macOS Terminal.app
+
+The interactive picker accepts Home/End to jump to the first/last result, but the stock macOS Terminal.app does not send the standard escape sequences for those keys by default — it scrolls the scrollback instead. Use `g` / `G` (vim-style aliases) to jump to the top/bottom, or switch to iTerm2 / WezTerm / Ghostty where Home/End work as expected.
+
 
 ## Requirements
 

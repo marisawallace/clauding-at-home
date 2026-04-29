@@ -709,6 +709,13 @@ Examples:
     )
 
     parser.add_argument(
+        "-n", "--no-interactive",
+        dest="no_interactive",
+        action="store_true",
+        help="Print results as a static list instead of the arrow-key picker"
+    )
+
+    parser.add_argument(
         "-s", "--source",
         choices=["all", "llm", "claude-code"],
         default="all",
@@ -759,11 +766,32 @@ Examples:
     import demo_mode
     results = demo_mode.maybe_apply(results, config) # No-op unless DEMO_* env vars are set.
 
+    current_host = resolve_host_name(config)
+
+    # Interactive picker is the default. Auto-fall-back to the static list when
+    # the user asks for JSON, asks to open in $EDITOR, explicitly opts out, or
+    # when stdout/stdin isn't a TTY (e.g. piped to `less`, redirected to file).
+    use_interactive = not (
+        args.no_interactive
+        or args.json
+        or args.open
+        or not sys.stdout.isatty()
+        or not sys.stdin.isatty()
+    )
+
     # Output results
     if args.json:
         print_json(results)
+    elif use_interactive:
+        if not results:
+            print(f"{Colors.RED}No results found.{Colors.RESET}")
+        else:
+            import interactive_picker
+            # Best result first so the cursor starts on the strongest match.
+            picker_results = sorted(results, key=lambda r: -r.total_score)
+            sys.exit(interactive_picker.pick_and_act(picker_results, args.query, args.exact, current_host))
     else:
-        print_results(results, args.query, exact=args.exact, current_host=resolve_host_name(config))
+        print_results(results, args.query, exact=args.exact, current_host=current_host)
 
     # Open in editor if requested
     if args.open:

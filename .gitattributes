@@ -1,0 +1,9 @@
+# Vendored third-party code — see vendor/VERSIONS.txt
+# linguist-vendored:  GitHub excludes these from repo language stats and
+#                     collapses them by default in PR diff views.
+# linguist-generated: marks the files as machine-managed so reviewers don't
+#                     waste time line-by-line reviewing them.
+# -diff:              git won't show inline diffs for these in `git log -p`
+#                     etc., keeping vendor bumps as single "binary"-style
+#                     change entries.
+vendor/** linguist-vendored linguist-generated -diff

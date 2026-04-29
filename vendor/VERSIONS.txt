@@ -1,0 +1,23 @@
+Vendored runtime dependencies for the interactive picker (interactive_picker.py).
+
+Pinned versions:
+  prompt_toolkit==3.0.52
+  wcwidth==0.6.0
+
+Why vendored:
+  The interactive search-result picker is the default UX, so the dependency
+  must be present without a `pip install` step. prompt_toolkit's 3.x line is
+  stable and the surface we use (Application, Window, FormattedTextControl,
+  KeyBindings) has been unchanged for years. wcwidth is prompt_toolkit's only
+  runtime dependency.
+
+To refresh:
+  1. pip download --no-deps 'prompt_toolkit==<new>' 'wcwidth==<new>' -d /tmp/dl
+  2. rm -rf vendor/prompt_toolkit vendor/wcwidth
+  3. cd vendor && python3 -m zipfile -e /tmp/dl/prompt_toolkit-*.whl .
+                  python3 -m zipfile -e /tmp/dl/wcwidth-*.whl .
+     (Keep the .dist-info directories — prompt_toolkit reads its own version
+     via importlib.metadata at import time and will fail without them.)
+  4. Update the pinned versions above.
+
+Loaded via vendor_loader.py, which prepends `vendor/` to sys.path.
