@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .claude/*
 data/*
+claude_code_anomalies.log
 
 # Virtual environments
 venv/

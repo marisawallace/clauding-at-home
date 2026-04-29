@@ -4,7 +4,7 @@ I wanted full-text search for my [claude.ai](https://claude.ai/) chats, so I mad
 
 ## Features
 
-- **Multi-provider**: currently Claude and ChatGPT.
+- **Multi-provider**: currently Claude, ChatGPT, and Claude Code.
 - **Multi-account** per provider.
 - **Smart search ranking**
 - **Hyperlinks in the results**: easy resume when you've found *that chat*
@@ -82,6 +82,50 @@ The sync script includes multiple safety mechanisms:
 
 Then everything should just work!
 
+### Claude Code
+
+[Claude Code](https://claude.com/claude-code) writes a JSONL transcript per
+session under `~/.claude/projects/`. This repo can index those for search and
+view, with per-machine attribution so the resume command points at the right
+host.
+
+Setup is one command:
+
+```
+python3 migrations/002_setup_claude_code_archival.py
+```
+
+That migration will:
+
+- Add `Stop` and `SessionEnd` hooks to `~/.claude/settings.json` (with a
+  timestamped backup) pointing at `claude_code_hook.py` in this repo.
+- Write `CLAUDE_CODE_SOURCES=<hostname>=<absolute-archive-path>` to `.env`.
+- Create `data/llm_data/claude-code/<hostname>/` as the archive root.
+
+After that, every time a Claude Code session ends, the hook reconciles
+`~/.claude/projects/*.jsonl` into the archive (append-only, idempotent).
+**On the first `SessionEnd` after setup, all existing on-disk Claude Code
+history backfills automatically** — no manual import step.
+
+To verify: open and exit any Claude Code session, then search for something
+you said in it:
+
+```
+python3 full_text_search_chats_archive.py "some phrase"
+```
+
+Multiple machines: run the migration on each one. They'll each add their own
+`hostname=path` entry to `CLAUDE_CODE_SOURCES`, and search results are tagged
+with the originating hostname so the resume command lands on the right host.
+
+**Assumption**: Claude Code JSONL transcripts are immutable append-only logs.
+The line-count-based sync depends on this. If it ever changes, archives could
+diverge — the hook writes to `claude_code_anomalies.log` as a canary.
+
+To uninstall: delete the `Stop` and `SessionEnd` entries pointing at
+`claude_code_hook.py` from `~/.claude/settings.json`, and unset
+`CLAUDE_CODE_SOURCES` in `.env`.
+
 ## Usage (if you set up based aliases)
 
 ```
@@ -121,11 +165,15 @@ clauding-at-home/
 │   │   │       ├── projects/
 │   │   │       │   └── YYYY-MM-DD_Project.json
 │   │   │       └── user.json
-│   │   └── chatgpt/
-│   │       └── user@example.com/
-│   │           ├── conversations/
-│   │           │   └── YYYY-MM-DD_Title.json
-│   │           └── user.json
+│   │   ├── chatgpt/
+│   │   │   └── user@example.com/
+│   │   │       ├── conversations/
+│   │   │       │   └── YYYY-MM-DD_Title.json
+│   │   │       └── user.json
+│   │   └── claude-code/            # Claude Code session archives
+│   │       └── <hostname>/         # one subdir per machine
+│   │           └── <project-slug>/
+│   │               └── <session-id>.jsonl
 │   ├── archived_exports/           # Processed export zip files
 │   │   ├── claude/
 │   │   │   └── data-YYYY-MM-DD-*.zip
@@ -139,8 +187,10 @@ clauding-at-home/
 │           ├── {uuid}.md
 │           └── {uuid}.html
 ├── migrations/                     # One-time data migration scripts
-│   └── 001_consolidate_data_dirs.py
+│   ├── 001_consolidate_data_dirs.py
+│   └── 002_setup_claude_code_archival.py
 ├── sync_local_chats_archive.py     # Import and sync exports
+├── claude_code_hook.py             # Claude Code Stop/SessionEnd hook
 ├── full_text_search_chats_archive.py  # Search conversations
 └── view_conversation.py            # View conversations as MD/HTML
 ```

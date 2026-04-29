@@ -473,8 +473,12 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False):
         if result.provider != "claude-code":
             print(f"{Colors.DIM}UUID: {result.uuid}{Colors.RESET}")
         if result.provider == "claude-code":
-            print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}{Colors.RESET}")
-            print(f"{Colors.ORANGE}{result.get_provider_url()}{Colors.RESET}")
+            extra = result.extra or {}
+            cwd = extra.get("cwd", "~")
+            host = extra.get("host", "")
+            host_suffix = f" | {host}" if host else ""
+            print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}{host_suffix}{Colors.RESET}")
+            print(f"{Colors.ORANGE}cd {cwd} && claude -r {result.uuid}{Colors.RESET}")
         else:
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}{Colors.RESET}")
             print(f"{Colors.BLUE}{result.get_provider_url()}{Colors.RESET}")
