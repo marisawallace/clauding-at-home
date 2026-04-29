@@ -1,6 +1,6 @@
 ![Demo gif showing searching in the terminal](demo.gif)
 
-I wanted full-text search for my [claude.ai](https://claude.ai/) chats, so I made this.
+I wanted full-text search over *all* my LLM chats, so I made this.
 
 ## Features
 
@@ -85,9 +85,9 @@ Then everything should just work!
 ### Claude Code
 
 [Claude Code](https://claude.com/claude-code) writes a JSONL transcript per
-session under `~/.claude/projects/`. This repo can index those for search and
-view, with per-machine attribution so the resume command points at the right
-host.
+session under `~/.claude/projects/`. By default, these are local to your machine, and not synced to the cloud.
+
+`claude_code_hook.py` in this repo can archive all those sessions for search, sync, and markdown editing.
 
 Setup is one command:
 
@@ -95,44 +95,14 @@ Setup is one command:
 python3 migrations/002_setup_claude_code_archival.py
 ```
 
-That migration will:
+Which adds hooks in your `~/.claude/settings.json` to call `claude_code_hook.py`. Sessions are archived under `data/llm_data/claude-code/[HOSTNAME]/`
 
-- Prompt for a human-readable name for this machine (defaults to a
-  normalized `gethostname()`, e.g. `marisas-mbp`), and write it as
-  `CLAUDE_CODE_HOST` to `.env`. The override exists because macOS hostnames
-  drift with network conditions; pin it once and it stays put.
-- Add `Stop` and `SessionEnd` hooks to `~/.claude/settings.json` (with a
-  timestamped backup) pointing at `claude_code_hook.py` in this repo.
-- Write `CLAUDE_CODE_SOURCES=<host>=<absolute-archive-path>` to `.env`.
-- Create `data/llm_data/claude-code/<host>/` as the archive root.
-- Optionally, prompt to backfill any existing `~/.claude/projects/`
-  transcripts into the archive in one shot (with size + progress) so the
-  first real session doesn't pay that cost.
+Sync `data/` across multiple machines (MEGA, Dropbox, etc.), no problem.
 
-After that, every time a Claude Code session ends, the hook reconciles
-`~/.claude/projects/*.jsonl` into the archive (append-only, idempotent).
-If you skip the optional backfill, the next `SessionEnd` will sweep any
-existing history in — that first sweep blocks Claude Code's exit, so it
-can feel slow if your history is large.
-
-To verify: open and exit any Claude Code session, then search for something
-you said in it:
-
-```
-python3 full_text_search_chats_archive.py "some phrase"
-```
-
-Multiple machines: run the migration on each one. They'll each add their own
-`hostname=path` entry to `CLAUDE_CODE_SOURCES`, and search results are tagged
-with the originating hostname so the resume command lands on the right host.
 
 **Assumption**: Claude Code JSONL transcripts are immutable append-only logs.
-The line-count-based sync depends on this. If it ever changes, archives could
-diverge — the hook writes to `claude_code_anomalies.log` as a canary.
 
-To uninstall: delete the `Stop` and `SessionEnd` entries pointing at
-`claude_code_hook.py` from `~/.claude/settings.json`, and unset
-`CLAUDE_CODE_HOST` and `CLAUDE_CODE_SOURCES` in `.env`.
+The line-count-based sync depends on this. If this changes, archives could diverge from `~/.claude/projects/` — the hook writes to `claude_code_anomalies.log` as a canary.
 
 ## Usage (if you set up based aliases)
 
