@@ -90,7 +90,7 @@ class SearchResult:
             cwd = extra.get("cwd", "~")
             host = extra.get("host", "")
             prefix = f"[{host}] " if host else ""
-            return f"{prefix}cd {shlex.quote(cwd)} && claude -r {self.uuid}"
+            return f"{prefix}pushd {shlex.quote(cwd)} && claude -r {self.uuid}"
         else:
             return f"Unknown provider: {self.provider}"
 
