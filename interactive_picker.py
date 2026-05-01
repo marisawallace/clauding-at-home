@@ -115,6 +115,11 @@ def _render_result(result, query: str, exact: bool, selected: bool, current_host
     else:
         line([("fg:#888888", f"Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {result.email}")])
 
+    if result.provider == "claude-code":
+        extra = result.extra or {}
+        cwd = os.path.expanduser(extra.get("cwd", "~"))
+        line([("fg:#888888", cwd)])
+
     line([("fg:#888888", f"Score: {result.total_score:.1f} | Matches: {len(result.matches)}")])
 
     if result.matches:
