@@ -74,12 +74,23 @@ def find_conversation_file(data_dir: Path, uuid: str) -> Optional[tuple[Path, st
 
 
 def format_timestamp(timestamp_str: str) -> str:
-    """Format ISO timestamp to readable format."""
+    """Format an ISO timestamp as 'YYYY-MM-DD HH:MM' in local time."""
     try:
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-        return dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+        return dt.astimezone().strftime('%Y-%m-%d %H:%M')
     except Exception:
         return timestamp_str
+
+
+def time_tag(iso: str, cls: str) -> str:
+    """An ISO timestamp as a <time> element.
+
+    The raw ISO value is kept in the `datetime` attribute; a small script in
+    the generated page reformats the visible text to the viewer's local time.
+    The Python-formatted fallback shows if scripting is disabled.
+    """
+    return (f'<time class="{cls}" datetime="{html.escape(iso or "")}">'
+            f'{html.escape(format_timestamp(iso))}</time>')
 
 
 def conversation_to_markdown(data: dict) -> str:
@@ -170,11 +181,36 @@ def _markdown_renderer():
 
 @functools.lru_cache(maxsize=1)
 def _pygments_css() -> str:
-    """CSS rules for Pygments-highlighted code blocks (the `.highlight` class)."""
+    """CSS rules for Pygments-highlighted code blocks.
+
+    Emits a Monokai scheme for the default (dark) theme and a light scheme
+    scoped to `[data-theme="light"]`, so highlighting tracks the page theme.
+    """
     import vendor_loader  # noqa: F401
     from pygments.formatters import HtmlFormatter
 
-    return HtmlFormatter().get_style_defs(".highlight")
+    dark = HtmlFormatter(style="monokai").get_style_defs(".highlight")
+    light = HtmlFormatter(style="default").get_style_defs(
+        '[data-theme="light"] .highlight')
+    return dark + "\n" + light
+
+
+def ensure_stylesheet(local_views_dir: Path) -> Path:
+    """Deploy the shared conversation stylesheet next to the generated pages.
+
+    Combines the repo's source stylesheet with the Pygments highlighting rules
+    and writes the result to `<local_views_dir>/assets/conversation.css`, which
+    every generated page links. Rewritten on each render so restyling the
+    source file propagates to all cached pages without regenerating them.
+    """
+    source = Path(__file__).parent.resolve() / "assets" / "conversation.css"
+    combined = source.read_text(encoding="utf-8") + "\n" + _pygments_css() + "\n"
+
+    assets_dir = local_views_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    target = assets_dir / "conversation.css"
+    target.write_text(combined, encoding="utf-8")
+    return target
 
 
 def render_markdown(text: str) -> str:
@@ -184,12 +220,21 @@ def render_markdown(text: str) -> str:
     return _markdown_renderer()(text)
 
 
-def conversation_to_html(data: dict) -> str:
+# Human-facing label for the conversation's source provider.
+_SOURCE_LABELS = {
+    "claude": "claude.ai",
+    "chatgpt": "chatgpt.com",
+    "claude-code": "Claude Code",
+}
+
+
+def conversation_to_html(data: dict, provider: str = "") -> str:
     """Convert conversation JSON to HTML format with styling."""
     name = html.escape(data.get("name", "(untitled)"))
+    source = html.escape(_SOURCE_LABELS.get(provider, provider))
     uuid = html.escape(data.get("uuid", "unknown"))
-    created = html.escape(format_timestamp(data.get("created_at", "")))
-    updated = html.escape(format_timestamp(data.get("updated_at", "")))
+    created = time_tag(data.get("created_at", ""), "localtime")
+    updated = time_tag(data.get("updated_at", ""), "localtime")
     summary = html.escape(data.get("summary", "")) if data.get("summary") else ""
 
     # Build HTML
@@ -200,216 +245,36 @@ def conversation_to_html(data: dict) -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>""" + name + """</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+    <script>
+        // Apply the saved theme before first paint to avoid a flash.
+        try {
+            document.documentElement.dataset.theme =
+                localStorage.getItem("conversation-theme") || "dark";
+        } catch (e) {
+            document.documentElement.dataset.theme = "dark";
         }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #f5f5f5;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .header {
-            border-bottom: 3px solid #e0e0e0;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-        }
-
-        h1 {
-            color: #2c3e50;
-            margin-bottom: 15px;
-            font-size: 2em;
-        }
-
-        .metadata {
-            color: #666;
-            font-size: 0.9em;
-            line-height: 1.8;
-        }
-
-        .metadata strong {
-            color: #444;
-        }
-
-        .metadata code {
-            background: #f0f0f0;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 0.85em;
-        }
-
-        .message {
-            margin-bottom: 30px;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #ddd;
-        }
-
-        .message.user {
-            background: #f8f9fa;
-            border-left-color: #4a90e2;
-        }
-
-        .message.assistant {
-            background: #fefefe;
-            border-left-color: #50c878;
-        }
-
-        .message-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-
-        .sender {
-            font-weight: 600;
-            font-size: 1.1em;
-        }
-
-        .sender.user {
-            color: #4a90e2;
-        }
-
-        .sender.assistant {
-            color: #50c878;
-        }
-
-        .timestamp {
-            color: #999;
-            font-size: 0.85em;
-        }
-
-        .message-content {
-            color: #333;
-            word-wrap: break-word;
-        }
-
-        /* Spacing for rendered Markdown block elements. */
-        .message-content > *:first-child { margin-top: 0; }
-        .message-content > *:last-child { margin-bottom: 0; }
-
-        .message-content p { margin: 10px 0; }
-
-        .message-content h1,
-        .message-content h2,
-        .message-content h3,
-        .message-content h4,
-        .message-content h5,
-        .message-content h6 {
-            color: #2c3e50;
-            margin: 18px 0 8px;
-            line-height: 1.3;
-        }
-
-        .message-content h1 { font-size: 1.5em; }
-        .message-content h2 { font-size: 1.3em; }
-        .message-content h3 { font-size: 1.15em; }
-
-        .message-content ul,
-        .message-content ol {
-            margin: 10px 0;
-            padding-left: 1.6em;
-        }
-
-        .message-content li { margin: 4px 0; }
-
-        .message-content blockquote {
-            margin: 10px 0;
-            padding: 4px 16px;
-            border-left: 4px solid #d0d7de;
-            color: #57606a;
-        }
-
-        .message-content a { color: #4a90e2; }
-
-        .message-content table {
-            border-collapse: collapse;
-            margin: 12px 0;
-        }
-
-        .message-content th,
-        .message-content td {
-            border: 1px solid #d0d7de;
-            padding: 6px 12px;
-        }
-
-        .message-content th { background: #f0f0f0; }
-
-        .message-content hr {
-            border: none;
-            border-top: 1px solid #e0e0e0;
-            margin: 20px 0;
-        }
-
-        .message-content pre,
-        .message-content .highlight {
-            background: #f6f8fa;
-            padding: 12px;
-            border-radius: 6px;
-            overflow-x: auto;
-            margin: 10px 0;
-        }
-
-        .message-content pre { margin: 0; }
-
-        .message-content code {
-            font-family: 'Monaco', 'Courier New', monospace;
-            font-size: 0.9em;
-        }
-
-        /* Inline code (not inside a highlighted block). */
-        .message-content :not(pre) > code {
-            background: #f0f0f0;
-            padding: 2px 5px;
-            border-radius: 3px;
-        }
-
-        .attachments {
-            margin-top: 15px;
-            padding: 10px;
-            background: #fff3cd;
-            border-radius: 4px;
-            color: #856404;
-            font-size: 0.9em;
-        }
-
-        /* Pygments syntax-highlighting rules for fenced code blocks. */
-""" + _pygments_css() + """
-    </style>
+    </script>
+    <link rel="stylesheet" href="../assets/conversation.css">
 </head>
 <body>
+    <div class="topbar">
+        <div class="topbar-left">
+            <span class="topbar-title">""" + name + """</span>
+            <span class="topbar-source">""" + source + """</span>
+        </div>
+        <button class="theme-toggle" onclick="(function(){var d=document.documentElement;var t=d.dataset.theme==='light'?'dark':'light';d.dataset.theme=t;try{localStorage.setItem('conversation-theme',t)}catch(e){}})()">&#9680; theme</button>
+    </div>
     <div class="container">
-        <div class="header">
-            <h1>""" + name + """</h1>
-            <div class="metadata">
-                <div><strong>UUID:</strong> <code>""" + uuid + """</code></div>
-                <div><strong>Created:</strong> """ + created + """</div>
-                <div><strong>Updated:</strong> """ + updated + """</div>""")
+        <div class="metadata">
+            <div><strong>UUID:</strong> <code>""" + uuid + """</code></div>
+            <div><strong>Created:</strong> """ + created + """</div>
+            <div><strong>Updated:</strong> """ + updated + """</div>""")
 
     if summary:
         html_parts.append("""
-                <div><strong>Summary:</strong> """ + summary + """</div>""")
+            <div><strong>Summary:</strong> """ + summary + """</div>""")
 
     html_parts.append("""
-            </div>
         </div>
 
         <div class="messages">""")
@@ -417,17 +282,14 @@ def conversation_to_html(data: dict) -> str:
     # Process each message
     for msg in data.get("chat_messages", []):
         sender = msg.get("sender", "unknown")
-        timestamp = html.escape(format_timestamp(msg.get("created_at", "")))
-        sender_class = "user" if sender == "human" else "assistant"
-        sender_label = "User" if sender == "human" else "Assistant"
+        timestamp = time_tag(msg.get("created_at", ""), "timestamp")
+        role = "user" if sender == "human" else "assistant"
 
         html_parts.append(f"""
-            <div class="message {sender_class}">
-                <div class="message-header">
-                    <div class="sender {sender_class}">{sender_label}</div>
-                    <div class="timestamp">{timestamp}</div>
-                </div>
-                <div class="message-content">""")
+            <div class="message-row {role}">
+                <div class="gutter">{timestamp}</div>
+                <div class="message">
+                    <div class="message-content">""")
 
         # Message content. Collect the message text plus any distinct text
         # content blocks, then render the whole thing as Markdown so it reads
@@ -453,14 +315,32 @@ def conversation_to_html(data: dict) -> str:
             if files:
                 attachment_text.append(f"Files: {len(files)} file(s)")
             html_parts.append(f"""
-                <div class="attachments">{" | ".join(attachment_text)}</div>""")
+                    <div class="attachments">{" | ".join(attachment_text)}</div>""")
 
         html_parts.append("""
+                </div>
             </div>""")
 
     html_parts.append("""
         </div>
     </div>
+    <script>
+        // Reformat every <time> element to the viewer's local timezone.
+        (function () {
+            function pad(n) { return String(n).padStart(2, "0"); }
+            function fmt(iso) {
+                var d = new Date(iso);
+                if (isNaN(d.getTime())) return null;
+                return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" +
+                    pad(d.getDate()) + " " + pad(d.getHours()) + ":" +
+                    pad(d.getMinutes());
+            }
+            document.querySelectorAll("time[datetime]").forEach(function (t) {
+                var s = fmt(t.getAttribute("datetime"));
+                if (s) t.textContent = s;
+            });
+        })();
+    </script>
 </body>
 </html>""")
 
@@ -547,7 +427,7 @@ def render_conversation(provider: str, conv_file: Path, fmt: str) -> str:
         data = json.load(f)
     if fmt == "markdown":
         return conversation_to_markdown(data)
-    return conversation_to_html(data)
+    return conversation_to_html(data, provider)
 
 
 def get_output_path(local_views_dir: Path, uuid: str, provider: str, format: str = "markdown") -> Path:
@@ -635,6 +515,11 @@ Examples:
 
     # Determine output path
     output_path = get_output_path(local_views_dir, args.uuid, provider, args.format)
+
+    # HTML pages link a shared stylesheet — (re)deploy it so restyling the
+    # source propagates even to cached pages that aren't regenerated.
+    if args.format == "html":
+        ensure_stylesheet(local_views_dir)
 
     # Generate fresh content from the stored conversation.
     try:

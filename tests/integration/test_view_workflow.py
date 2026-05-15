@@ -150,7 +150,15 @@ def test_view_html_format(isolated_workspace, sample_claude_export, repo_root, t
     assert "**isolated workspaces**" not in html_content, "Raw Markdown leaked into HTML"
     # Verify: fenced code block is syntax-highlighted by Pygments
     assert 'class="highlight"' in html_content, "Code block not highlighted"
-    assert ".highlight" in html_content, "Pygments CSS not embedded"
+
+    # Verify: the page links the shared stylesheet rather than embedding CSS
+    assert '<link rel="stylesheet" href="../assets/conversation.css">' in html_content, \
+        "Stylesheet not linked"
+    css_file = isolated_workspace / "data/local_views/assets/conversation.css"
+    assert css_file.exists(), "Shared stylesheet not deployed"
+    css_content = css_file.read_text()
+    assert ".highlight" in css_content, "Pygments CSS not in stylesheet"
+    assert "--color-accent" in css_content, "Design tokens not in stylesheet"
 
 
 @pytest.mark.integration

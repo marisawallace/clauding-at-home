@@ -1,0 +1,397 @@
+/* conversation.css — styling for generated conversation views.
+ *
+ * Source of truth lives in the repo at assets/conversation.css. At HTML render
+ * time view_conversation.py copies this file (with the Pygments syntax-
+ * highlighting rules appended) into <local_views>/assets/conversation.css, which
+ * every generated page links via ../assets/conversation.css.
+ *
+ * Aesthetic: grayscale, understated, purple accent, Monokai code, with subtle
+ * frosted-glass accents. Palette adapted from pc/frontend/src/styles/tokens.css.
+ */
+
+/* ----- design tokens: dark theme (default) ------------------------------- */
+
+:root {
+    --color-bg-base: #161616;
+    --color-bg-primary: #1e1e1e;
+    --color-bg-secondary: #252526;
+    --color-bg-tertiary: #2d2d2d;
+    --color-bg-elevated: #333333;
+
+    --color-text-primary: #d4d4d4;
+    --color-text-secondary: #9d9d9d;
+    --color-text-muted: #6e6e6e;
+    --color-text-bright: #f0f0f0;
+
+    --color-accent: #9d79d6;
+    --color-accent-dim: #6c5b99;
+    --color-accent-bright: #b392d9;
+    --color-accent-bg: rgba(157, 121, 214, 0.12);
+
+    /* Monokai semantic hues. */
+    --color-success: #a6e22e;
+    --color-warning: #e6db74;
+    --color-error: #f92672;
+    --color-info: #66d9ef;
+
+    --color-border: #3e3e3e;
+    --color-border-subtle: #2e2e2e;
+
+    /* Translucent surfaces for the frosted-glass accents. */
+    --glass-bg: rgba(37, 37, 38, 0.66);
+    --glass-border: rgba(255, 255, 255, 0.06);
+
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
+
+    --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'Fira Code', 'JetBrains Mono', 'SF Mono', Consolas,
+        'Courier New', monospace;
+
+    --space-xs: 0.25rem;
+    --space-sm: 0.5rem;
+    --space-md: 1rem;
+    --space-lg: 1.5rem;
+    --space-xl: 2rem;
+
+    --radius-sm: 0.25rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+
+    /* Width of the left timestamp gutter. */
+    --gutter-width: 7rem;
+
+    /* Faint purple-tinted ambiance behind the page — barely lurking. */
+    --ambient-glow: radial-gradient(
+        ellipse 70% 50% at 85% -5%,
+        rgba(157, 121, 214, 0.10),
+        transparent 70%);
+}
+
+/* ----- design tokens: light theme --------------------------------------- */
+
+[data-theme="light"] {
+    --color-bg-base: #ececed;
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f8f8f8;
+    --color-bg-tertiary: #f0f0f0;
+    --color-bg-elevated: #e8e8e8;
+
+    --color-text-primary: #1e1e1e;
+    --color-text-secondary: #5c5c5c;
+    --color-text-muted: #999999;
+    --color-text-bright: #000000;
+
+    --color-accent: #7c5cbf;
+    --color-accent-dim: #5a3f9e;
+    --color-accent-bright: #9d79d6;
+    --color-accent-bg: rgba(124, 92, 191, 0.10);
+
+    --color-border: #d0d0d0;
+    --color-border-subtle: #e2e2e2;
+
+    --glass-bg: rgba(255, 255, 255, 0.66);
+    --glass-border: rgba(0, 0, 0, 0.06);
+
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.10);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+
+    --ambient-glow: radial-gradient(
+        ellipse 70% 50% at 85% -5%,
+        rgba(124, 92, 191, 0.08),
+        transparent 70%);
+}
+
+/* ----- reset ------------------------------------------------------------- */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* ----- page -------------------------------------------------------------- */
+
+body {
+    font-family: var(--font-sans);
+    line-height: 1.65;
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-base);
+    background-image: var(--ambient-glow);
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    padding: 0;
+    min-height: 100vh;
+}
+
+/* ----- top bar ----------------------------------------------------------- */
+
+.topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) var(--space-lg);
+    background: var(--color-bg-tertiary);
+    border-bottom: 1px solid var(--color-border);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+}
+
+.topbar-left {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-sm);
+}
+
+.topbar-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    color: var(--color-text-bright);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.topbar-source {
+    flex: 0 0 auto;
+    color: var(--color-accent);
+    font-weight: 400;
+    font-size: 0.8rem;
+}
+
+/* ----- theme toggle ------------------------------------------------------ */
+
+.theme-toggle {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-xs) var(--space-sm);
+    cursor: pointer;
+    transition: color 150ms ease, border-color 150ms ease;
+}
+
+.theme-toggle:hover {
+    color: var(--color-accent-bright);
+    border-color: var(--color-accent-dim);
+}
+
+/* ----- container --------------------------------------------------------- */
+
+.container {
+    max-width: 1000px;
+    margin: var(--space-xl) auto;
+    /* Extra left padding hosts the timestamp gutter, so message content and
+     * the metadata rule share the container's content-left edge. */
+    padding: 0 var(--space-md) 0 calc(var(--space-md) + var(--gutter-width));
+}
+
+/* ----- metadata ---------------------------------------------------------- */
+
+.metadata {
+    margin-bottom: var(--space-xl);
+    padding-bottom: var(--space-md);
+    border-bottom: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.9;
+}
+
+.metadata strong {
+    color: var(--color-text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.85em;
+}
+
+.metadata code {
+    font-family: var(--font-mono);
+    background: var(--color-accent-bg);
+    color: var(--color-accent-bright);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.9em;
+}
+
+/* ----- messages ---------------------------------------------------------- */
+
+.message-row {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: var(--space-lg);
+}
+
+/* Left gutter — holds the timestamp, revealed on hover. Pulled into the
+ * container's left padding so it sits outside the message content column. */
+.gutter {
+    flex: 0 0 var(--gutter-width);
+    margin-left: calc(-1 * var(--gutter-width));
+    padding-top: 0.15rem;
+    padding-right: var(--space-sm);
+    text-align: right;
+}
+
+.timestamp {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 200ms ease;
+}
+
+.gutter:hover .timestamp {
+    opacity: 1;
+}
+
+/* The message body fills the space to the right of the gutter. */
+.message {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* User messages: offset bubble, right-aligned. */
+.message-row.user .message {
+    max-width: 78%;
+    margin-left: auto;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+}
+
+/* Assistant messages: no offset, sit directly on the background. */
+.message-row.assistant .message {
+    padding-top: var(--space-xs);
+}
+
+/* ----- rendered markdown ------------------------------------------------- */
+
+.message-content {
+    color: var(--color-text-primary);
+    word-wrap: break-word;
+}
+
+.message-content > *:first-child { margin-top: 0; }
+.message-content > *:last-child { margin-bottom: 0; }
+
+.message-content p { margin: var(--space-md) 0; }
+
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+    color: var(--color-text-bright);
+    margin: var(--space-lg) 0 var(--space-sm);
+    line-height: 1.3;
+}
+
+.message-content h1 { font-size: 1.4rem; }
+.message-content h2 { font-size: 1.2rem; }
+.message-content h3 { font-size: 1.05rem; }
+
+.message-content ul,
+.message-content ol {
+    margin: var(--space-md) 0;
+    padding-left: 1.6em;
+}
+
+.message-content li { margin: var(--space-xs) 0; }
+
+.message-content blockquote {
+    margin: var(--space-md) 0;
+    padding: var(--space-xs) var(--space-md);
+    border-left: 3px solid var(--color-accent-dim);
+    color: var(--color-text-secondary);
+}
+
+.message-content a {
+    color: var(--color-accent-bright);
+    text-decoration: none;
+    border-bottom: 1px solid var(--color-accent-dim);
+}
+
+.message-content a:hover {
+    color: var(--color-accent);
+}
+
+.message-content table {
+    border-collapse: collapse;
+    margin: var(--space-md) 0;
+    font-size: 0.9rem;
+}
+
+.message-content th,
+.message-content td {
+    border: 1px solid var(--color-border);
+    padding: var(--space-xs) var(--space-md);
+}
+
+.message-content th {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-bright);
+    text-align: left;
+}
+
+.message-content hr {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: var(--space-lg) 0;
+}
+
+/* ----- code -------------------------------------------------------------- */
+
+.message-content pre,
+.message-content .highlight {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-subtle);
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    margin: var(--space-md) 0;
+}
+
+.message-content pre { margin: 0; }
+
+.message-content code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+}
+
+/* Inline code (not inside a highlighted block). */
+.message-content :not(pre) > code {
+    background: var(--color-accent-bg);
+    color: var(--color-accent-bright);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+}
+
+/* ----- attachments ------------------------------------------------------- */
+
+.attachments {
+    margin-top: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-accent-bg);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+}
+
+/* ----- pygments syntax highlighting -------------------------------------- */
+/* Monokai (dark) + a light variant are appended below at render time. */
