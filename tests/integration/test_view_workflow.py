@@ -3,12 +3,60 @@ Integration tests for view workflow (view_conversation.py).
 
 These tests exercise conversation viewing and format conversion.
 """
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+
+def _import_export(isolated_workspace, sample_claude_export, repo_root):
+    """Copy the sample export into the workspace and run the sync script."""
+    zip_dest = isolated_workspace / "data-2025-01-05.zip"
+    shutil.copy(sample_claude_export, zip_dest)
+    sync_result = subprocess.run(
+        [sys.executable, str(repo_root / "sync_local_chats_archive.py"), "--claude"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+    assert sync_result.returncode == 0
+
+
+def _view(isolated_workspace, repo_root, uuid):
+    """Run view_conversation.py for a UUID in markdown mode without opening it."""
+    return subprocess.run(
+        [sys.executable, str(repo_root / "view_conversation.py"),
+         uuid, "--format", "markdown", "--no-open"],
+        cwd=isolated_workspace,
+        capture_output=True,
+        text=True
+    )
+
+
+def _append_message(isolated_workspace, uuid, text, sender="assistant"):
+    """Append a chat message to a stored Claude conversation JSON."""
+    conv_dir = (isolated_workspace
+                / "data/llm_data/claude/claude-test@example.com/conversations")
+    conv_files = list(conv_dir.glob("*.json"))
+    for path in conv_files:
+        data = json.loads(path.read_text())
+        if data.get("uuid") == uuid:
+            data["chat_messages"].append({
+                "uuid": f"msg-appended-{len(data['chat_messages'])}",
+                "text": text,
+                "content": [],
+                "sender": sender,
+                "created_at": "2025-02-01T10:00:00.000000Z",
+                "attachments": [],
+                "files": []
+            })
+            data["updated_at"] = "2025-02-01T10:00:00.000000Z"
+            path.write_text(json.dumps(data, indent=2))
+            return
+    raise AssertionError(f"Conversation {uuid} not found in {conv_dir}")
 
 
 @pytest.mark.integration
@@ -169,6 +217,64 @@ def test_view_caching(isolated_workspace, sample_claude_export, repo_root, test_
     # Verify: File modification time hasn't changed (file was reused)
     second_mtime = md_file.stat().st_mtime
     assert first_mtime == second_mtime, "File should be reused, not regenerated"
+
+
+@pytest.mark.integration
+def test_view_refresh_stale(isolated_workspace, sample_claude_export, repo_root, test_env_file):
+    """A cached markdown is refreshed when the conversation gained new messages."""
+    _import_export(isolated_workspace, sample_claude_export, repo_root)
+
+    assert _view(isolated_workspace, repo_root, "conv-uuid-001").returncode == 0
+
+    new_text = "This is a freshly appended assistant reply."
+    _append_message(isolated_workspace, "conv-uuid-001", new_text)
+
+    result = _view(isolated_workspace, repo_root, "conv-uuid-001")
+    print(f"\nRefresh STDOUT:\n{result.stdout}")
+    assert result.returncode == 0
+    assert "refreshed" in result.stdout.lower()
+
+    md_file = isolated_workspace / "data/local_views/claude/conv-uuid-001.md"
+    assert new_text in md_file.read_text(), "New message not added to refreshed markdown"
+
+
+@pytest.mark.integration
+def test_view_preserves_edits(isolated_workspace, sample_claude_export, repo_root, test_env_file):
+    """A hand-edited markdown is left untouched even when the conversation grew."""
+    _import_export(isolated_workspace, sample_claude_export, repo_root)
+
+    assert _view(isolated_workspace, repo_root, "conv-uuid-001").returncode == 0
+
+    md_file = isolated_workspace / "data/local_views/claude/conv-uuid-001.md"
+    marker = "LOCAL EDIT MARKER — do not clobber"
+    md_file.write_text(md_file.read_text() + f"\n{marker}\n")
+
+    new_text = "This appended reply must NOT reach the edited file."
+    _append_message(isolated_workspace, "conv-uuid-001", new_text)
+
+    result = _view(isolated_workspace, repo_root, "conv-uuid-001")
+    print(f"\nPreserve-edits STDOUT:\n{result.stdout}")
+    assert result.returncode == 0
+    assert "local edits" in result.stdout.lower()
+
+    content = md_file.read_text()
+    assert marker in content, "Local edit was clobbered"
+    assert new_text not in content, "New message overwrote edited file"
+
+
+@pytest.mark.integration
+def test_view_current_no_rewrite(isolated_workspace, sample_claude_export, repo_root, test_env_file):
+    """Viewing an unchanged conversation reports it up to date and does not rewrite."""
+    _import_export(isolated_workspace, sample_claude_export, repo_root)
+
+    assert _view(isolated_workspace, repo_root, "conv-uuid-001").returncode == 0
+    md_file = isolated_workspace / "data/local_views/claude/conv-uuid-001.md"
+    first_mtime = md_file.stat().st_mtime
+
+    result = _view(isolated_workspace, repo_root, "conv-uuid-001")
+    assert result.returncode == 0
+    assert "up to date" in result.stdout.lower()
+    assert md_file.stat().st_mtime == first_mtime, "File should not be rewritten"
 
 
 @pytest.mark.integration

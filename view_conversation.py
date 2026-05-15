@@ -391,6 +391,46 @@ def claude_code_to_markdown(filepath: Path) -> str:
     return "\n".join(parts)
 
 
+def markdown_body(content: str) -> str:
+    """Markdown after the header — everything past the first '\n---\n' separator.
+
+    Returns '' if there is no separator (no body, or not generated markdown).
+    """
+    parts = content.split("\n---\n", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def classify_refresh(existing: str, fresh: str) -> str:
+    """Compare a cached markdown file against freshly generated markdown.
+
+    Returns one of:
+      'current'  — bodies match; the cached file is up to date.
+      'stale'    — the cached body is an exact prefix of the fresh body, so the
+                   conversation only grew and the file has no local edits.
+      'diverged' — the file was hand-edited, or earlier messages changed.
+
+    The header is excluded from the comparison: it carries volatile fields
+    (Updated:/Summary:) that change on every conversation update.
+    """
+    old, new = markdown_body(existing), markdown_body(fresh)
+    if old == new:
+        return "current"
+    if old and new.startswith(old):
+        return "stale"
+    return "diverged"
+
+
+def render_conversation(provider: str, conv_file: Path, fmt: str) -> str:
+    """Render a conversation file to markdown or HTML."""
+    if provider == "claude-code":
+        return claude_code_to_markdown(conv_file)
+    with open(conv_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if fmt == "markdown":
+        return conversation_to_markdown(data)
+    return conversation_to_html(data)
+
+
 def get_output_path(local_views_dir: Path, uuid: str, provider: str, format: str = "markdown") -> Path:
     """Get output path for the specified format, namespaced by provider."""
     extension = "md" if format == "markdown" else "html"
@@ -477,27 +517,35 @@ Examples:
     # Determine output path
     output_path = get_output_path(local_views_dir, args.uuid, provider, args.format)
 
-    # Check if file already exists
-    if output_path.exists():
-        print(f"{args.format.capitalize()} file already exists: {output_path}")
-        print(f"Opening existing file (skipping regeneration)...")
-    else:
-        # Load and convert
-        try:
-            if provider == "claude-code":
-                content = claude_code_to_markdown(conv_file)
-            else:
-                with open(conv_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if args.format == "markdown":
-                    content = conversation_to_markdown(data)
-                else:  # html
-                    content = conversation_to_html(data)
-        except Exception as e:
-            print(f"Error converting conversation: {e}", file=sys.stderr)
-            sys.exit(1)
+    # Generate fresh content from the stored conversation.
+    try:
+        content = render_conversation(provider, conv_file, args.format)
+    except Exception as e:
+        print(f"Error converting conversation: {e}", file=sys.stderr)
+        sys.exit(1)
 
-        # Write file
+    # Decide whether to (re)write the cached file.
+    write_file = True
+    if output_path.exists():
+        if args.format != "markdown":
+            # HTML keeps its reuse-if-exists behavior.
+            print(f"HTML file already exists: {output_path}")
+            print("Opening existing file (skipping regeneration)...")
+            write_file = False
+        else:
+            existing = output_path.read_text(encoding="utf-8")
+            status = classify_refresh(existing, content)
+            if status == "current":
+                print("Markdown is up to date — opening existing file.")
+                write_file = False
+            elif status == "stale":
+                print("Conversation has new messages — refreshed the markdown.")
+            else:  # diverged
+                print("Note: this conversation has newer messages, but the markdown "
+                      "file has local edits — opening your edited file unchanged.")
+                write_file = False
+
+    if write_file:
         try:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(content)
