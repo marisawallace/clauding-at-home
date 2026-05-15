@@ -144,7 +144,7 @@ class ResultPicker:
         self.current_host = current_host
         self.demo = demo
         self.index = 0
-        self.action = None  # "resume" | "view" | None
+        self.action = None  # "resume" | "view" | "view-html" | None
         self._selected_block_height = 1
         # Cache the unselected render of each result. The selected one is
         # re-rendered on every frame (only one entry, cheap); everything else
@@ -174,7 +174,7 @@ class ResultPicker:
         blocks.append(("", "\n"))
         blocks.append(
             ("fg:ansibrightblack",
-             f"  ↑/↓ navigate  •  Enter resume/open  •  v view  •  q/Esc cancel  •  {self.index + 1}/{len(self.results)}\n")
+             f"  ↑/↓ navigate  •  Enter resume/open  •  v view  •  h html  •  q/Esc cancel  •  {self.index + 1}/{len(self.results)}\n")
         )
         return FormattedText(blocks)
 
@@ -221,6 +221,14 @@ class ResultPicker:
         def _(event):
             self.action = "view"
             event.app.exit(result=self.results[self.index])
+
+        @kb.add("h")
+        def _(event):
+            # HTML rendering is only supported for the claude.ai and chatgpt
+            # providers; ignore the key for others rather than exiting.
+            if self.results[self.index].provider in ("claude", "chatgpt"):
+                self.action = "view-html"
+                event.app.exit(result=self.results[self.index])
 
         @kb.add("q")
         @kb.add("escape")
@@ -301,11 +309,12 @@ def act_on_choice(result, current_host: str, demo: bool = False) -> int:
     return 0
 
 
-def view_choice(result) -> int:
+def view_choice(result, fmt: str = "markdown") -> int:
     """Launch view_conversation on the chosen result, then return."""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "view_conversation.py")
+    cmd = [sys.executable, script, result.uuid, "--format", fmt]
     try:
-        proc = subprocess.run([sys.executable, script, result.uuid])
+        proc = subprocess.run(cmd)
         return proc.returncode
     except FileNotFoundError:
         print("Error: view_conversation.py not found.", file=sys.stderr)
@@ -323,6 +332,10 @@ def pick_and_act(results: list, query: str, exact: bool, current_host: str, demo
             return 0
         if picker.action == "view":
             view_choice(chosen)
+            # Re-enter the picker so the user can keep browsing.
+            continue
+        if picker.action == "view-html":
+            view_choice(chosen, fmt="html")
             # Re-enter the picker so the user can keep browsing.
             continue
         # action == "resume": Enter — fire the resume/open action and exit.
