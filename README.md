@@ -2,16 +2,21 @@
 
 I wanted offline full-text search and ownership over *all* my LLM chats. So I made this.
 
+Terminal UI, hit enter to directly resume a chat. Will open your browser or `cd` and `claude --resume`.
+
+**Status**: core features stable, actively in use and under development. If you're using this, please tell me!
+
 ## Features
 
 - **Multi-provider**: Claude, ChatGPT, Claude Code.
-- **Multi-account** per provider.
+- **Multi-account** per provider
+- **Made for cloud sync**: put `clauding-at-home/data/` in Dropbox/MEGA/etc. Search your full LLM history on all your machines.
+- **Multi-host** for Claude Code. `laptop` and `desktop` chats retain separate host paths. Sync & search everything on every device.
 - **Smart search ranking**
 - **Local view**: copy chats to Markdown or HTML, open in `$EDITOR`
-- **Non-destructive sync**: preserves a chat even if you deleted it on the website. Export/sync the last 30 days only and it'll preserve your older chats. 
+- **Non-destructive**: preserves a chat even if you deleted it on the website. Export/sync the last 30 days only and it'll preserve your older chats. 
 - **Export backup**: automatic archive of your data export zipfiles
 - **UUID tracking**: Correctly handles conversation renames
-- **Canonical**: Sync your `clauding-at-home/data/` folder across all your machines (MEGA, Dropbox, etc.). Your full LLM history travels with you.
 - **Simple**: just a folder of python scripts. Works with system python.
 - **Completely offline**
 
@@ -48,7 +53,7 @@ alias csvh="python3 $CODE_HOME/clauding-at-home/view_conversation.py --format ht
 Make sure you have $EDITOR set.
 
 ```
-export VISUAL=subl
+export VISUAL=code
 export EDITOR="$VISUAL"
 ```
 
@@ -87,7 +92,7 @@ Then everything should just work!
 
 #### Claude Code
 
-Writes a JSONL transcript per session under `~/.claude/projects/`. By default, these are local to your machine-- not synced to the cloud.
+Writes a JSONL transcript per session under `~/.claude/projects/`. These are local to your machine-- not synced to the cloud.
 
 `claude_code_hook.py` in this repo can archive all those sessions for search, sync, and markdown editing.
 
@@ -97,9 +102,7 @@ Setup is one command:
 python3 migrations/002_setup_claude_code_archival.py
 ```
 
-Which adds hooks in your `~/.claude/settings.json` to call `claude_code_hook.py`. Sessions are archived under `data/llm_data/claude-code/[HOSTNAME]/`
-
-Sync `data/` across multiple machines (MEGA, Dropbox, etc.), no problem.
+Which adds hooks in your `~/.claude/settings.json` to call `claude_code_hook.py`. By default, sessions are archived under `clauding-at-home/data/llm_data/claude-code/[HOSTNAME]/`. You can change this with `CLAUDE_CODE_SOURCES` in `.env`.
 
 
 **Assumption**: Claude Code JSONL transcripts are immutable append-only logs.
@@ -109,7 +112,7 @@ The line-count-based sync depends on this. If this changes, archives could diver
 ## Usage (if you set up based aliases)
 
 ```
-# Enter to resume, v to open in `$EDITOR`
+# Enter to resume, v to open markdown in `$EDITOR`, h to open HTML in browser.
 # q, Esc, or Ctrl-C to exit
 cs "hi claude"
 
