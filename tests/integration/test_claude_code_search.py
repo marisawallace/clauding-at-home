@@ -95,7 +95,7 @@ def test_search_claude_code_resume_command(claude_code_workspace, repo_root):
     )
 
     assert result.returncode == 0
-    assert "cd /home/testuser/projects/my-app && claude -r cc-test-session-001" in result.stdout
+    assert "pushd /home/testuser/projects/my-app && claude -r cc-test-session-001" in result.stdout
     assert "testhost" in result.stdout
 
 
