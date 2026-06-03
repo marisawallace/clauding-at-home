@@ -812,6 +812,8 @@ Examples:
     results: List[SearchResult] = []
     recency = not args.no_recency
 
+    current_host = resolve_host_name(config)
+
     if args.source in ("all", "llm"):
         results.extend(search_archive(data_dir, args.query, apply_recency_boost=recency, exact=args.exact))
 
@@ -820,12 +822,11 @@ Examples:
         if cc_sources:
             cc_results = search_claude_code_archive(cc_sources, args.query, apply_recency_boost=recency, exact=args.exact)
             if args.here:
-                here_host = resolve_host_name(config)
                 pre_filter = cc_results
-                cc_results = filter_to_here(pre_filter, Path.cwd(), here_host)
+                cc_results = filter_to_here(pre_filter, Path.cwd(), current_host)
                 if pre_filter and not cc_results:
                     host_is_explicit = bool(config.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip())
-                    print(here_miss_hint(pre_filter, Path.cwd(), here_host, host_is_explicit), file=sys.stderr)
+                    print(here_miss_hint(pre_filter, Path.cwd(), current_host, host_is_explicit), file=sys.stderr)
             results.extend(cc_results)
         elif args.source == "claude-code":
             print(f"Error: {CLAUDE_CODE_SOURCES_ENV_KEY} not configured in .env", file=sys.stderr)
@@ -840,8 +841,6 @@ Examples:
 
     import demo_mode
     results = demo_mode.maybe_apply(results, config) # No-op unless DEMO_* env vars are set.
-
-    current_host = resolve_host_name(config)
 
     # Interactive picker is the default. Auto-fall-back to the static list when
     # the user asks for JSON, asks to open in $EDITOR, explicitly opts out, or
