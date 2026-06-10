@@ -799,7 +799,18 @@ Examples:
         help="Only Claude Code sessions run from the current directory (and subdirs) on this host"
     )
 
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show analytics over the archive (counts, timeline, activity) instead of searching"
+    )
+
     args = parser.parse_args()
+
+    # --stats reports over the whole archive, so it ignores any query and
+    # browses every item across the selected source(s).
+    if args.stats:
+        args.query = None
 
     # An absent or blank query switches to browse mode: match everything and
     # order strictly by recency.
@@ -865,6 +876,13 @@ Examples:
 
     import demo_mode
     results = demo_mode.maybe_apply(results, config) # No-op unless DEMO_* env vars are set.
+
+    # --stats: render the analytics report over the gathered items and exit
+    # before any picker/list output.
+    if args.stats:
+        import analytics
+        print(analytics.format_report(results))
+        return
 
     # Interactive picker is the default. Auto-fall-back to the static list when
     # the user asks for JSON, asks to open in $EDITOR, explicitly opts out, or
