@@ -489,6 +489,28 @@ def search_claude_code_archive(sources: List[Tuple[str, Path]], query: str, appl
     return results
 
 
+def gather_cc_tool_counts(sources: List[Tuple[str, Path]]):
+    """Sum Claude Code tool_use invocations across every JSONL in the sources.
+
+    Imperative shell around the pure claude_code_parser helpers; used by --stats.
+    """
+    from collections import Counter
+    import claude_code_parser as ccp
+
+    counts: Counter = Counter()
+    for _host, cc_data_dir in sources:
+        if not cc_data_dir.exists():
+            continue
+        for jsonl_file in cc_data_dir.rglob("*.jsonl"):
+            try:
+                lines = ccp.parse_jsonl(jsonl_file)
+            except Exception as e:
+                print(f"Warning: Could not read {jsonl_file}: {e}", file=sys.stderr)
+                continue
+            counts.update(ccp.count_tool_uses(lines))
+    return counts
+
+
 def filter_to_here(results: List[SearchResult], cwd: Path, host: str) -> List[SearchResult]:
     """Keep only claude-code results on `host` whose session cwd is `cwd` or a subdir of it.
 
@@ -881,7 +903,10 @@ Examples:
     # before any picker/list output.
     if args.stats:
         import analytics
-        print(analytics.format_report(results))
+        tool_counts = None
+        if args.source in ("all", "claude-code"):
+            tool_counts = gather_cc_tool_counts(parse_claude_code_sources(config))
+        print(analytics.format_report(results, tool_counts=tool_counts))
         return
 
     # Interactive picker is the default. Auto-fall-back to the static list when

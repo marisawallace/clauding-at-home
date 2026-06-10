@@ -202,3 +202,33 @@ class TestDeriveConversationName:
         name = ccp.derive_conversation_name(lines)
         assert name == "First line"
         assert "Second" not in name
+
+
+class TestCountToolUses:
+    def test_counts_each_invocation(self):
+        lines = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash"},
+                {"type": "tool_use", "name": "Bash"},
+                {"type": "text", "text": "hi"},
+            ]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Read"},
+            ]}},
+        ]
+        counts = ccp.count_tool_uses(lines)
+        assert counts["Bash"] == 2  # not de-duped within a turn
+        assert counts["Read"] == 1
+
+    def test_ignores_non_assistant_and_non_tool_blocks(self):
+        lines = [
+            {"type": "user", "message": {"content": "hi"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "thinking", "text": "..."},
+                {"type": "text", "text": "ok"},
+            ]}},
+        ]
+        assert ccp.count_tool_uses(lines) == {}
+
+    def test_empty(self):
+        assert ccp.count_tool_uses([]) == {}

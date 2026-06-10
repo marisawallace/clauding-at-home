@@ -249,8 +249,21 @@ def _weekday_block(hist: List[int], width: int = 20) -> List[str]:
     ]
 
 
-def format_report(results: Sequence["SearchResult"], width: int = 64) -> str:
-    """Render the full analytics report as a plain-text string (pure)."""
+def tool_leaderboard(counts: Counter, n: int = 12) -> List[Tuple[str, int]]:
+    """Most-invoked Claude Code tools, descending."""
+    return counts.most_common(n)
+
+
+def format_report(
+    results: Sequence["SearchResult"],
+    width: int = 64,
+    tool_counts: Optional[Counter] = None,
+) -> str:
+    """Render the full analytics report as a plain-text string (pure).
+
+    tool_counts, if given, adds a Claude Code tool-usage leaderboard (the shell
+    gathers it by parsing the JSONL transcripts).
+    """
     rule = "─" * width
 
     if not results:
@@ -301,6 +314,16 @@ def format_report(results: Sequence["SearchResult"], width: int = 64) -> str:
         label_w = max(len(d) for d, _ in dirs)
         for d, c in dirs:
             lines.append(f"  {d.ljust(label_w)}  {c:>4}  {bar(c, max_count, 16)}")
+        lines.append("")
+
+    if tool_counts:
+        leaders = tool_leaderboard(tool_counts)
+        total_calls = sum(tool_counts.values())
+        lines.append(f"  Claude Code tool usage ({total_calls:,} calls)")
+        max_count = leaders[0][1]
+        label_w = max(len(name) for name, _ in leaders)
+        for name, count in leaders:
+            lines.append(f"  {name.ljust(label_w)}  {count:>6}  {bar(count, max_count, 20)}")
         lines.append("")
 
     busiest = busiest_day(results)

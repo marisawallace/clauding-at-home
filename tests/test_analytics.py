@@ -124,6 +124,21 @@ def test_format_report_empty():
     assert "No conversations" in analytics.format_report([])
 
 
+def test_tool_leaderboard_orders_descending():
+    from collections import Counter
+    counts = Counter({"Bash": 10, "Read": 5, "Edit": 7})
+    assert analytics.tool_leaderboard(counts, n=2) == [("Bash", 10), ("Edit", 7)]
+
+
+def test_format_report_tool_section_only_when_counts_given():
+    from collections import Counter
+    results = [_result("claude-code", extra={"host": "laptop", "cwd": "/x"})]
+    assert "tool usage" not in analytics.format_report(results)
+    with_tools = analytics.format_report(results, tool_counts=Counter({"Bash": 3}))
+    assert "Claude Code tool usage" in with_tools
+    assert "Bash" in with_tools
+
+
 def test_format_report_includes_sections():
     results = [
         _result("claude", created_at="2026-01-15T09:30:00Z"),

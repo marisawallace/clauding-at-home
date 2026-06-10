@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -118,6 +119,22 @@ def extract_searchable_text(lines: list[dict]) -> list[str]:
                     texts.append(block["text"])
 
     return texts
+
+
+def count_tool_uses(lines: list[dict]) -> "Counter[str]":
+    """Count every assistant tool_use block by tool name.
+
+    Unlike extract_conversation_turns (which de-dups tool names within a turn
+    for display), this counts each invocation, suitable for a usage leaderboard.
+    """
+    counts: Counter[str] = Counter()
+    for line in lines:
+        if line.get("type") != "assistant":
+            continue
+        for block in line.get("message", {}).get("content", []):
+            if block.get("type") == "tool_use" and block.get("name"):
+                counts[block["name"]] += 1
+    return counts
 
 
 def extract_conversation_turns(lines: list[dict]) -> list[dict]:
