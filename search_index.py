@@ -29,6 +29,7 @@ import fcntl
 import functools
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 from collections import Counter
@@ -432,62 +433,105 @@ def _open_index_locked(db_path: Path) -> Optional[sqlite3.Connection]:
     return None
 
 
+def _scan_suffix(dir_path, suffix: str):
+    """Yield (path_str, os.stat_result) for entries in dir_path whose name
+    ends with suffix, reproducing Path.glob('*' + suffix): name-based
+    matching (so dotfiles match and matching is case-sensitive), stat that
+    follows symlinks, entries failing to stat skipped silently. A missing or
+    unreadable directory yields nothing."""
+    try:
+        entries = os.scandir(dir_path)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            if not entry.name.endswith(suffix):
+                continue
+            try:
+                st = entry.stat()  # follows symlinks, like Path.stat()
+            except OSError:
+                continue
+            yield entry.path, st
+
+
+def _walk_jsonl(root):
+    """Yield (path_str, os.stat_result) for every '*.jsonl' entry at or below
+    root, reproducing Path.rglob('*.jsonl'): does not descend into symlinked
+    directories (recurse_symlinks=False), but still yields symlinked '*.jsonl'
+    entries (stat follows the link); entries failing to stat are skipped."""
+    try:
+        entries = os.scandir(root)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            if entry.name.endswith(".jsonl"):
+                try:
+                    st = entry.stat()
+                except OSError:
+                    st = None
+                if st is not None:
+                    yield entry.path, st
+            if entry.is_dir(follow_symlinks=False):
+                yield from _walk_jsonl(entry.path)
+
+
 def scan_disk(data_dir: Path, cc_sources: list[tuple[str, Path]]) -> list[FileStat]:
     """Stat every archive file, walking directories exactly like
-    search_archive() and search_claude_code_archive() do."""
+    search_archive() and search_claude_code_archive() do.
+
+    Uses os.scandir rather than pathlib/glob for speed while preserving the
+    exact classification of the old implementation; see the characterization
+    tests in tests/test_search_index.py."""
     stats: list[FileStat] = []
 
     for provider in ["claude", "chatgpt"]:
         provider_dir = data_dir / provider
-        if not provider_dir.exists():
+        try:
+            user_entries = os.scandir(provider_dir)
+        except OSError:
             continue
-        for user_dir in provider_dir.iterdir():
-            if not user_dir.is_dir():
-                continue
-            email = user_dir.name
-            for subdir, item_type in (("conversations", "conversation"), ("projects", "project")):
-                item_dir = user_dir / subdir
-                if not item_dir.exists():
+        with user_entries:
+            for user_entry in user_entries:
+                if not user_entry.is_dir():  # follows symlinks, like Path.is_dir()
                     continue
-                for f in item_dir.glob("*.json"):
-                    try:
-                        st = f.stat()
-                    except OSError:
-                        continue
-                    stats.append(FileStat(
-                        path=str(f), source=SOURCE_LLM,
-                        mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size,
-                        provider=provider, email=email, item_type=item_type,
-                    ))
+                email = user_entry.name
+                for subdir, item_type in (("conversations", "conversation"), ("projects", "project")):
+                    item_dir = os.path.join(user_entry.path, subdir)
+                    for path, st in _scan_suffix(item_dir, ".json"):
+                        stats.append(FileStat(
+                            path=path, source=SOURCE_LLM,
+                            mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size,
+                            provider=provider, email=email, item_type=item_type,
+                        ))
 
     for host, cc_data_dir in cc_sources:
-        if not cc_data_dir.exists():
-            continue
+        # Depth-1 directories (following symlinks, like iterdir() + is_dir())
+        # hold the searchable transcripts; their direct *.jsonl children are
+        # SOURCE_CC.
         searchable = set()
-        for project_dir in cc_data_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            for f in project_dir.glob("*.jsonl"):
-                try:
-                    st = f.stat()
-                except OSError:
+        try:
+            project_entries = os.scandir(cc_data_dir)
+        except OSError:
+            continue
+        with project_entries:
+            for project_entry in project_entries:
+                if not project_entry.is_dir():
                     continue
-                searchable.add(f)
-                stats.append(FileStat(
-                    path=str(f), source=SOURCE_CC,
-                    mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size,
-                    email=project_dir.name, host=host,
-                ))
-        # Deeper transcripts (subagents) feed the tool leaderboard only.
-        for f in cc_data_dir.rglob("*.jsonl"):
-            if f in searchable:
-                continue
-            try:
-                st = f.stat()
-            except OSError:
+                for path, st in _scan_suffix(project_entry.path, ".jsonl"):
+                    searchable.add(path)
+                    stats.append(FileStat(
+                        path=path, source=SOURCE_CC,
+                        mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size,
+                        email=project_entry.name, host=host,
+                    ))
+        # Every other *.jsonl (root level or deeper, e.g. subagents) feeds the
+        # tool leaderboard only.
+        for path, st in _walk_jsonl(cc_data_dir):
+            if path in searchable:
                 continue
             stats.append(FileStat(
-                path=str(f), source=SOURCE_CC_TOOLS,
+                path=path, source=SOURCE_CC_TOOLS,
                 mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size, host=host,
             ))
 

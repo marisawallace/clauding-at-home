@@ -380,3 +380,127 @@ def test_refresh_integrity_error_does_not_delete_db(tmp_path, monkeypatch):
     assert result is None
     assert db.exists()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# scan_disk — characterization tests
+#
+# These pin the exact classification of the pathlib/glob implementation that
+# the os.scandir rewrite must reproduce. Behaviors observed against the old
+# implementation and preserved deliberately:
+#   - dotfiles match ('.hidden.json' is picked up, matching Path.glob('*'))
+#   - matching is case-sensitive ('X.JSON' / 'B.JSONL' are NOT picked up)
+#   - user/project dirs follow symlinks (a symlinked project dir is scanned,
+#     its files keyed by the *symlink* name)
+#   - the deep SOURCE_CC_TOOLS walk does NOT descend into symlinked dirs
+#     (matching Path.rglob recurse_symlinks=False), so a file reachable only
+#     through a symlinked subdir below depth 1 is absent
+#   - a broken symlink ending in .jsonl/.json is skipped (stat OSError)
+#   - any '*.jsonl' whose parent is a depth-1 dir is SOURCE_CC (incl. dirs
+#     like 'subagents'); everything deeper or at the root is SOURCE_CC_TOOLS
+# ---------------------------------------------------------------------------
+
+
+def _rec(fs, base):
+    """Reduce a FileStat to its classification tuple plus a base-relative path,
+    dropping stat fields that depend on the filesystem."""
+    return (fs.source, str(Path(fs.path).relative_to(base)),
+            fs.provider, fs.email, fs.item_type, fs.host)
+
+
+def _build_corpus(tmp_path):
+    data = tmp_path / "data"
+    cc = tmp_path / "cc"
+
+    # --- LLM tree ---
+    conv = data / "claude" / "alice@example.com" / "conversations"
+    proj = data / "claude" / "alice@example.com" / "projects"
+    conv.mkdir(parents=True)
+    proj.mkdir(parents=True)
+    (conv / "c1.json").write_text("{}")
+    (conv / ".hidden.json").write_text("{}")   # dotfile -> matched
+    (conv / "X.JSON").write_text("{}")          # wrong case -> not matched
+    (conv / "notes.txt").write_text("x")        # wrong suffix -> not matched
+    (proj / "p1.json").write_text("{}")
+    # a stray file (not a dir) at user level, and a .json at the wrong depth
+    (data / "claude" / "stray.txt").write_text("x")
+    (data / "claude" / "alice@example.com" / "loose.json").write_text("{}")  # wrong depth
+    # second provider with only conversations
+    cg = data / "chatgpt" / "bob@example.com" / "conversations"
+    cg.mkdir(parents=True)
+    (cg / "g1.json").write_text("{}")
+
+    # --- Claude Code tree ---
+    (cc / "proj1").mkdir(parents=True)
+    (cc / "proj1" / "a.jsonl").write_text("")        # depth-2 -> SOURCE_CC
+    (cc / "proj1" / ".hidden.jsonl").write_text("")  # dotfile -> SOURCE_CC
+    (cc / "proj1" / "B.JSONL").write_text("")        # wrong case -> skipped
+    (cc / "proj1" / "skip.txt").write_text("")       # wrong suffix -> skipped
+    (cc / "root.jsonl").write_text("")               # root level -> CC_TOOLS
+    (cc / "subagents").mkdir()
+    (cc / "subagents" / "deep.jsonl").write_text("") # depth-2 -> SOURCE_CC
+    (cc / "proj1" / "nested").mkdir()
+    (cc / "proj1" / "nested" / "d3.jsonl").write_text("")  # depth-3 -> CC_TOOLS
+
+    # symlinked project dir (followed; keyed by symlink name)
+    (cc / "realproj").mkdir()
+    (cc / "realproj" / "s.jsonl").write_text("")
+    (cc / "linkproj").symlink_to("realproj", target_is_directory=True)
+
+    # symlinked deeper dir below a project: its file must be ABSENT (rglob
+    # does not follow it, and it is below depth 1 so the CC pass misses it too)
+    (cc / "othersrc").mkdir()
+    (cc / "othersrc" / "hidden.jsonl").write_text("")
+    (cc / "proj1" / "linksub").symlink_to("../othersrc", target_is_directory=True)
+
+    # broken symlinks ending in the right suffix -> skipped on stat
+    (cc / "proj1" / "broken.jsonl").symlink_to("/nonexistent/x.jsonl")
+    (conv / "broken.json").symlink_to("/nonexistent/y.json")
+
+    return data, cc
+
+
+def test_scan_disk_classification(tmp_path):
+    data, cc = _build_corpus(tmp_path)
+    stats = si.scan_disk(data, [("host1", cc)])
+
+    got = {_rec(fs, tmp_path) for fs in stats}
+    expected = {
+        # LLM
+        (si.SOURCE_LLM, "data/claude/alice@example.com/conversations/c1.json",
+         "claude", "alice@example.com", "conversation", ""),
+        (si.SOURCE_LLM, "data/claude/alice@example.com/conversations/.hidden.json",
+         "claude", "alice@example.com", "conversation", ""),
+        (si.SOURCE_LLM, "data/claude/alice@example.com/projects/p1.json",
+         "claude", "alice@example.com", "project", ""),
+        (si.SOURCE_LLM, "data/chatgpt/bob@example.com/conversations/g1.json",
+         "chatgpt", "bob@example.com", "conversation", ""),
+        # CC searchable (depth-2, symlinked project dir keyed by symlink name)
+        (si.SOURCE_CC, "cc/proj1/a.jsonl", "", "proj1", "", "host1"),
+        (si.SOURCE_CC, "cc/proj1/.hidden.jsonl", "", "proj1", "", "host1"),
+        (si.SOURCE_CC, "cc/subagents/deep.jsonl", "", "subagents", "", "host1"),
+        (si.SOURCE_CC, "cc/realproj/s.jsonl", "", "realproj", "", "host1"),
+        (si.SOURCE_CC, "cc/linkproj/s.jsonl", "", "linkproj", "", "host1"),
+        (si.SOURCE_CC, "cc/othersrc/hidden.jsonl", "", "othersrc", "", "host1"),
+        # CC tools-only (root level + deeper than depth 2)
+        (si.SOURCE_CC_TOOLS, "cc/root.jsonl", "", "", "", "host1"),
+        (si.SOURCE_CC_TOOLS, "cc/proj1/nested/d3.jsonl", "", "", "", "host1"),
+    }
+    assert got == expected
+
+
+def test_scan_disk_stat_fields_match_os_stat(tmp_path):
+    import os
+    data, cc = _build_corpus(tmp_path)
+    stats = si.scan_disk(data, [("host1", cc)])
+    for fs in stats:
+        st = os.stat(fs.path)  # follows symlinks, like the scan
+        assert fs.mtime_ns == st.st_mtime_ns
+        assert fs.ctime_ns == st.st_ctime_ns
+        assert fs.size == st.st_size
+
+
+def test_scan_disk_missing_dirs_are_silent(tmp_path):
+    # No data dir and no cc dir on disk -> empty result, no crash.
+    stats = si.scan_disk(tmp_path / "nope", [("host1", tmp_path / "alsonope")])
+    assert stats == []
