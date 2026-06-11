@@ -37,9 +37,7 @@ from typing import Callable, Optional
 
 import claude_code_parser as ccp
 
-SCHEMA_VERSION = 3
-HEAD_HASH_BYTES = 1024
-TAIL_HASH_BYTES = 1024
+SCHEMA_VERSION = 4
 RECONCILE_BATCH = 200
 
 # Modules whose source determines what ends up in the index: the extractors,
@@ -95,12 +93,10 @@ CREATE TABLE files (
                                             -- rsync --times) whose write still
                                             -- stamps ctime
     size          INTEGER NOT NULL,
-    indexed_bytes INTEGER NOT NULL,         -- jsonl: end of last complete line
-    head_hash     TEXT NOT NULL,            -- sha1 of first head_len bytes
-    head_len      INTEGER NOT NULL,         -- distinguishes append vs rewrite
-    tail_hash     TEXT NOT NULL             -- sha1 of last TAIL_HASH_BYTES of
-                                            -- the indexed region; catches mid-
-                                            -- file rewrites the head hash misses
+    indexed_bytes INTEGER NOT NULL          -- jsonl: end of last complete line;
+                                            -- a torn trailing line (no newline)
+                                            -- leaves size > indexed_bytes, so
+                                            -- the file re-indexes until it lands
 );
 
 CREATE TABLE items (
@@ -167,20 +163,16 @@ class IndexedFile:
     ctime_ns: int
     size: int
     indexed_bytes: int
-    head_hash: str
-    head_len: int
-    tail_hash: str
 
 
 @dataclass(frozen=True)
 class ReconcilePlan:
     new: tuple
     rewritten: tuple        # (FileStat, IndexedFile)
-    maybe_appended: tuple   # (FileStat, IndexedFile); head_hash check decides
     removed: tuple          # IndexedFile
 
     def is_noop(self) -> bool:
-        return not (self.new or self.rewritten or self.maybe_appended or self.removed)
+        return not (self.new or self.rewritten or self.removed)
 
 
 # ---------------------------------------------------------------------------
@@ -278,37 +270,16 @@ def make_cc_item_meta(metadata: dict, texts: list[str]) -> dict:
     }
 
 
-def merge_cc_item_meta(existing: dict, tail: dict) -> dict:
-    """Merge metadata extracted from an appended JSONL tail into the stored
-    item row, reproducing what a full re-parse would derive.
-
-    First-occurrence fields (uuid, name, cwd, git_branch, created_at,
-    preview) keep their stored value unless it is still unset; updated_at
-    tracks the last timestamped line, so the tail wins when it has one.
-    """
-    merged = dict(existing)
-    if not merged["uuid"]:
-        merged["uuid"] = tail["uuid"]
-    if merged["name"] == "(untitled)":
-        merged["name"] = tail["name"]
-    if not merged["created_at"]:
-        merged["created_at"] = tail["created_at"]
-    if tail["updated_at"]:
-        merged["updated_at"] = tail["updated_at"]
-    for key in ("cwd", "git_branch"):
-        if not merged[key]:
-            merged[key] = tail[key]
-    if not merged["has_preview"] and tail["has_preview"]:
-        merged["preview"] = tail["preview"]
-        merged["has_preview"] = True
-    return merged
-
-
 def diff_index(disk: list[FileStat], indexed: list[IndexedFile]) -> ReconcilePlan:
-    """Pure diff between the filesystem and the files table."""
+    """Pure diff between the filesystem and the files table.
+
+    Any change to a file — append, rewrite, copy-in from sync — resolves to a
+    single `rewritten` op: the file's index rows are dropped and the whole
+    file is re-read and re-indexed. There is no incremental-append fast path.
+    """
     indexed_by_path = {ix.path: ix for ix in indexed}
     disk_paths = set()
-    new, rewritten, maybe_appended = [], [], []
+    new, rewritten = [], []
 
     for fs in disk:
         disk_paths.add(fs.path)
@@ -323,16 +294,12 @@ def diff_index(disk: list[FileStat], indexed: list[IndexedFile]) -> ReconcilePla
         stat_changed = (fs.mtime_ns != ix.mtime_ns or fs.ctime_ns != ix.ctime_ns
                         or fs.size != ix.size)
         if fs.source in (SOURCE_CC, SOURCE_CC_TOOLS):
-            # Append-only transcripts: growth is (probably) an append; the
-            # head-hash check in reconcile() demotes prefix changes to a
-            # rewrite. size > indexed_bytes with unchanged stat happens when
-            # the last scan saw a torn trailing line — reparse the tail.
+            # Append-only transcripts re-index whole on any change. An
+            # unchanged stat with size > indexed_bytes means the last scan saw
+            # a torn trailing line — re-index until the newline lands.
             if not stat_changed and fs.size <= ix.indexed_bytes:
                 continue
-            if fs.size >= ix.indexed_bytes and fs.size >= ix.size:
-                maybe_appended.append((fs, ix))
-            else:
-                rewritten.append((fs, ix))
+            rewritten.append((fs, ix))
         else:
             if stat_changed:
                 rewritten.append((fs, ix))
@@ -341,7 +308,6 @@ def diff_index(disk: list[FileStat], indexed: list[IndexedFile]) -> ReconcilePla
     return ReconcilePlan(
         new=tuple(new),
         rewritten=tuple(rewritten),
-        maybe_appended=tuple(maybe_appended),
         removed=tuple(removed),
     )
 
@@ -487,50 +453,28 @@ def scan_disk(data_dir: Path, cc_sources: list[tuple[str, Path]]) -> list[FileSt
 
 def load_indexed_files(conn: sqlite3.Connection) -> list[IndexedFile]:
     rows = conn.execute(
-        "SELECT id, path, source, mtime_ns, ctime_ns, size, indexed_bytes, head_hash, head_len, tail_hash FROM files"
+        "SELECT id, path, source, mtime_ns, ctime_ns, size, indexed_bytes FROM files"
     ).fetchall()
     return [IndexedFile(*row) for row in rows]
 
 
-def _read_complete_lines(path: str, offset: int) -> tuple[list[str], int, bytes]:
-    """Read raw JSONL lines from byte offset, stopping at the last newline.
+def _read_complete_lines(path: str) -> tuple[list[str], int]:
+    """Read the whole file's raw JSONL lines, stopping at the last newline.
 
     A torn trailing line (active session mid-write) stays unindexed; the
     returned end offset only covers complete lines, so the next reconcile
-    picks the line up once its newline lands. Also returns the file head
-    (first HEAD_HASH_BYTES) for hash bookkeeping.
+    picks the line up once its newline lands.
     """
     with open(path, "rb") as f:
-        head = f.read(HEAD_HASH_BYTES)
-        f.seek(offset)
         buf = f.read()
     last_nl = buf.rfind(b"\n")
     if last_nl == -1:
-        return [], offset, head
+        return [], 0
     # Split on byte-\n only: str.splitlines() also breaks on  /\x85
     # etc., which are legal inside JSON strings and would shred valid lines.
     complete = buf[:last_nl]
     lines = [seg.decode("utf-8", errors="replace") for seg in complete.split(b"\n")]
-    return lines, offset + last_nl + 1, head
-
-
-def _head_hash(path: str, length: int) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha1(f.read(length)).hexdigest()
-
-
-def _tail_hash_bytes(region: bytes) -> str:
-    """sha1 of the last TAIL_HASH_BYTES of an in-memory indexed region."""
-    return hashlib.sha1(region[-TAIL_HASH_BYTES:]).hexdigest()
-
-
-def _tail_hash(path: str, end: int) -> str:
-    """sha1 of the last TAIL_HASH_BYTES of the on-disk region [0, end).
-    Equals _tail_hash_bytes() over the same region."""
-    start = max(0, end - TAIL_HASH_BYTES)
-    with open(path, "rb") as f:
-        f.seek(start)
-        return hashlib.sha1(f.read(end - start)).hexdigest()
+    return lines, last_nl + 1
 
 
 def _delete_file_rows(conn: sqlite3.Connection, file_id: int) -> None:
@@ -554,12 +498,11 @@ def _insert_fts_segment(conn: sqlite3.Connection, file_id: int, body: str) -> No
 
 
 def _insert_file_row(conn: sqlite3.Connection, fs: FileStat,
-                     indexed_bytes: int, head: bytes, tail_hash: str) -> int:
+                     indexed_bytes: int) -> int:
     cur = conn.execute(
-        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes, head_hash, head_len, tail_hash) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (fs.path, fs.source, fs.mtime_ns, fs.ctime_ns, fs.size, indexed_bytes,
-         hashlib.sha1(head).hexdigest(), len(head), tail_hash),
+        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (fs.path, fs.source, fs.mtime_ns, fs.ctime_ns, fs.size, indexed_bytes),
     )
     return cur.lastrowid
 
@@ -594,8 +537,7 @@ def _index_llm_file(conn: sqlite3.Connection, fs: FileStat,
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         print(f"Warning: could not index {fs.path}: {e}", file=sys.stderr)
         return fs.path
-    file_id = _insert_file_row(conn, fs, len(raw), raw[:HEAD_HASH_BYTES],
-                               _tail_hash_bytes(raw))
+    file_id = _insert_file_row(conn, fs, len(raw))
     _insert_fts_segment(conn, file_id, searchable_body(texts))
     _insert_item_row(conn, file_id, fs.provider, fs.email, meta)
     return None
@@ -605,13 +547,12 @@ def _index_cc_file(conn: sqlite3.Connection, fs: FileStat) -> Optional[str]:
     """Index one Claude Code JSONL transcript. Returns the path on failure
     (unreadable file; retried and re-warned every run, like LLM files)."""
     try:
-        raw_lines, end_offset, head = _read_complete_lines(fs.path, 0)
-        tail_hash = _tail_hash(fs.path, end_offset)
+        raw_lines, end_offset = _read_complete_lines(fs.path)
     except OSError as e:
         print(f"Warning: could not index {fs.path}: {e}", file=sys.stderr)
         return fs.path
     lines = parse_jsonl_texts(raw_lines, fs.path)
-    file_id = _insert_file_row(conn, fs, end_offset, head, tail_hash)
+    file_id = _insert_file_row(conn, fs, end_offset)
     if fs.source == SOURCE_CC:
         texts = ccp.extract_searchable_text(lines)
         meta = make_cc_item_meta(ccp.extract_session_metadata(lines), texts)
@@ -626,69 +567,6 @@ def _index_cc_file(conn: sqlite3.Connection, fs: FileStat) -> Optional[str]:
     return None
 
 
-def _append_cc_file(conn: sqlite3.Connection, fs: FileStat, ix: IndexedFile) -> Optional[str]:
-    try:
-        raw_lines, end_offset, head = _read_complete_lines(fs.path, ix.indexed_bytes)
-        tail_hash = _tail_hash(fs.path, end_offset)
-    except OSError as e:
-        print(f"Warning: could not index {fs.path}: {e}", file=sys.stderr)
-        return fs.path
-    lines = parse_jsonl_texts(raw_lines, fs.path)
-    if fs.source == SOURCE_CC:
-        _append_cc_search_rows(conn, fs, ix, lines)
-
-    for tool, count in ccp.count_tool_uses(lines).items():
-        conn.execute(
-            "INSERT INTO cc_tool_counts(file_id, tool, count) VALUES (?, ?, ?) "
-            "ON CONFLICT(file_id, tool) DO UPDATE SET count = count + excluded.count",
-            (ix.id, tool, count),
-        )
-
-    # Re-hash the head over up to 1KB of the (possibly longer) file so the
-    # append-vs-rewrite check strengthens as small files grow; the tail hash
-    # advances to the new end of the indexed region.
-    conn.execute(
-        "UPDATE files SET mtime_ns = ?, ctime_ns = ?, size = ?, indexed_bytes = ?, head_hash = ?, head_len = ?, tail_hash = ? "
-        "WHERE id = ?",
-        (fs.mtime_ns, fs.ctime_ns, fs.size, end_offset,
-         hashlib.sha1(head).hexdigest(), len(head), tail_hash, ix.id),
-    )
-    return None
-
-
-def _append_cc_search_rows(conn: sqlite3.Connection, fs: FileStat,
-                           ix: IndexedFile, lines: list) -> None:
-    """Add the search-facing rows (fts segment, item metadata merge) for an
-    appended tail of a searchable Claude Code session."""
-    texts = ccp.extract_searchable_text(lines)
-    tail_meta = make_cc_item_meta(ccp.extract_session_metadata(lines), texts)
-    tail_meta["host"] = fs.host
-
-    _insert_fts_segment(conn, ix.id, searchable_body(texts))
-
-    row = conn.execute(
-        "SELECT uuid, name, created_at, updated_at, cwd, git_branch, preview, has_preview "
-        "FROM items WHERE file_id = ?", (ix.id,),
-    ).fetchone()
-    if row is None:
-        _insert_item_row(conn, ix.id, "claude-code", fs.email, tail_meta)
-    else:
-        existing = {
-            "uuid": row[0], "name": row[1], "created_at": row[2],
-            "updated_at": row[3], "cwd": row[4], "git_branch": row[5],
-            "preview": row[6], "has_preview": bool(row[7]),
-            "item_type": "conversation", "host": fs.host,
-        }
-        merged = merge_cc_item_meta(existing, tail_meta)
-        conn.execute(
-            "UPDATE items SET uuid = ?, name = ?, created_at = ?, updated_at = ?, "
-            "cwd = ?, git_branch = ?, preview = ?, has_preview = ? WHERE file_id = ?",
-            (merged["uuid"], merged["name"], merged["created_at"], merged["updated_at"],
-             merged["cwd"], merged["git_branch"], merged["preview"],
-             int(merged["has_preview"]), ix.id),
-        )
-
-
 def reconcile(conn: sqlite3.Connection, plan: ReconcilePlan,
               extract_llm_texts: Callable[[dict, str, str], list]) -> list:
     """Apply a ReconcilePlan in batched transactions (interrupt-safe: a
@@ -698,7 +576,7 @@ def reconcile(conn: sqlite3.Connection, plan: ReconcilePlan,
     corrupt); they hold no index rows and will be retried — and re-warned
     about — on every run until fixed or removed.
     """
-    total = len(plan.new) + len(plan.rewritten) + len(plan.maybe_appended) + len(plan.removed)
+    total = len(plan.new) + len(plan.rewritten) + len(plan.removed)
     if total > 50:
         print(f"Indexing {total} archive file(s)...", file=sys.stderr)
 
@@ -707,8 +585,6 @@ def reconcile(conn: sqlite3.Connection, plan: ReconcilePlan,
             yield ("remove", None, ix)
         for fs, ix in plan.rewritten:
             yield ("rewrite", fs, ix)
-        for fs, ix in plan.maybe_appended:
-            yield ("append?", fs, ix)
         for fs in plan.new:
             yield ("new", fs, None)
 
@@ -721,21 +597,6 @@ def reconcile(conn: sqlite3.Connection, plan: ReconcilePlan,
         elif op == "rewrite":
             _delete_file_rows(conn, ix.id)
             failed.append(_index_file(conn, fs, extract_llm_texts))
-        elif op == "append?":
-            try:
-                # Head AND tail of the already-indexed region must both be
-                # unchanged; a mid-file rewrite that spares the first 1KB
-                # would otherwise be mis-taken for an append and its new
-                # middle content never indexed.
-                is_append = (_head_hash(fs.path, ix.head_len) == ix.head_hash
-                             and _tail_hash(fs.path, ix.indexed_bytes) == ix.tail_hash)
-            except OSError:
-                continue  # file vanished mid-reconcile; next run handles it
-            if is_append:
-                failed.append(_append_cc_file(conn, fs, ix))
-            else:
-                _delete_file_rows(conn, ix.id)
-                failed.append(_index_file(conn, fs, extract_llm_texts))
         else:
             failed.append(_index_file(conn, fs, extract_llm_texts))
         pending += 1

@@ -79,12 +79,11 @@ def _fs(path, source=si.SOURCE_LLM, mtime_ns=1, ctime_ns=None, size=100, **kw):
 
 
 def _ix(path, source=si.SOURCE_LLM, mtime_ns=1, ctime_ns=None, size=100, indexed_bytes=None,
-        file_id=1, head_hash="h", head_len=100, tail_hash="t"):
+        file_id=1):
     return si.IndexedFile(
         id=file_id, path=path, source=source, mtime_ns=mtime_ns,
         ctime_ns=mtime_ns if ctime_ns is None else ctime_ns, size=size,
         indexed_bytes=size if indexed_bytes is None else indexed_bytes,
-        head_hash=head_hash, head_len=head_len, tail_hash=tail_hash,
     )
 
 
@@ -102,7 +101,6 @@ def test_diff_new_and_removed():
 def test_diff_changed_json_is_rewritten():
     plan = si.diff_index([_fs("/a.json", mtime_ns=2)], [_ix("/a.json", mtime_ns=1)])
     assert [f.path for f, _ in plan.rewritten] == ["/a.json"]
-    assert not plan.maybe_appended
 
 
 def test_diff_ctime_only_change_is_rewritten():
@@ -117,22 +115,21 @@ def test_diff_ctime_only_change_is_rewritten():
 
 def test_diff_ctime_only_change_reindexes_jsonl():
     # Same guarantee for append-only transcripts: an unchanged-size, restored-
-    # mtime rewrite with a fresh ctime is caught and reparsed, not skipped.
+    # mtime rewrite with a fresh ctime is caught and reindexed, not skipped.
     plan = si.diff_index(
         [_fs("/s.jsonl", source=si.SOURCE_CC, mtime_ns=1, ctime_ns=2, size=100)],
         [_ix("/s.jsonl", source=si.SOURCE_CC, mtime_ns=1, ctime_ns=1, size=100)],
     )
-    assert ([f.path for f, _ in plan.maybe_appended] == ["/s.jsonl"]
-            or [f.path for f, _ in plan.rewritten] == ["/s.jsonl"])
+    assert [f.path for f, _ in plan.rewritten] == ["/s.jsonl"]
 
 
-def test_diff_grown_jsonl_is_append_candidate():
+def test_diff_grown_jsonl_is_rewritten():
+    # No append fast path: a grown transcript re-indexes whole.
     plan = si.diff_index(
         [_fs("/s.jsonl", source=si.SOURCE_CC, mtime_ns=2, size=200)],
         [_ix("/s.jsonl", source=si.SOURCE_CC, mtime_ns=1, size=100)],
     )
-    assert [f.path for f, _ in plan.maybe_appended] == ["/s.jsonl"]
-    assert not plan.rewritten
+    assert [f.path for f, _ in plan.rewritten] == ["/s.jsonl"]
 
 
 def test_diff_shrunk_jsonl_is_rewritten():
@@ -150,7 +147,7 @@ def test_diff_torn_tail_reparsed_despite_unchanged_stat():
         [_fs("/s.jsonl", source=si.SOURCE_CC, size=100)],
         [_ix("/s.jsonl", source=si.SOURCE_CC, size=100, indexed_bytes=80)],
     )
-    assert [f.path for f, _ in plan.maybe_appended] == ["/s.jsonl"]
+    assert [f.path for f, _ in plan.rewritten] == ["/s.jsonl"]
 
 
 def test_diff_fully_indexed_jsonl_is_noop():
@@ -190,73 +187,22 @@ def test_llm_meta_project_keeps_top_level_updated_at():
 
 
 # ---------------------------------------------------------------------------
-# merge_cc_item_meta
-# ---------------------------------------------------------------------------
-
-def _cc_meta(**kw):
-    base = {
-        "uuid": "", "item_type": "conversation", "name": "(untitled)",
-        "created_at": "", "updated_at": "", "host": "h", "cwd": "",
-        "git_branch": "", "preview": "", "has_preview": False,
-    }
-    base.update(kw)
-    return base
-
-
-def test_merge_fills_unset_fields_from_tail():
-    existing = _cc_meta()
-    tail = _cc_meta(uuid="s1", name="First prompt", created_at="t1",
-                    updated_at="t2", cwd="/repo", git_branch="main",
-                    preview="First prompt", has_preview=True)
-    merged = si.merge_cc_item_meta(existing, tail)
-    assert merged["uuid"] == "s1"
-    assert merged["name"] == "First prompt"
-    assert merged["created_at"] == "t1"
-    assert merged["updated_at"] == "t2"
-    assert merged["cwd"] == "/repo"
-    assert merged["preview"] == "First prompt"
-
-
-def test_merge_keeps_first_occurrence_fields():
-    existing = _cc_meta(uuid="s1", name="Original", created_at="t1",
-                        updated_at="t2", cwd="/repo", git_branch="main",
-                        preview="p", has_preview=True)
-    tail = _cc_meta(uuid="other", name="Later prompt", created_at="t8",
-                    updated_at="t9", cwd="/elsewhere", git_branch="dev",
-                    preview="q", has_preview=True)
-    merged = si.merge_cc_item_meta(existing, tail)
-    assert merged["uuid"] == "s1"
-    assert merged["name"] == "Original"
-    assert merged["created_at"] == "t1"
-    assert merged["updated_at"] == "t9"  # only updated_at tracks the tail
-    assert merged["cwd"] == "/repo"
-    assert merged["preview"] == "p"
-
-
-def test_merge_keeps_updated_at_when_tail_has_no_timestamp():
-    existing = _cc_meta(updated_at="t2")
-    merged = si.merge_cc_item_meta(existing, _cc_meta(updated_at=""))
-    assert merged["updated_at"] == "t2"
-
-
-# ---------------------------------------------------------------------------
 # _read_complete_lines
 # ---------------------------------------------------------------------------
 
 def test_read_complete_lines_excludes_torn_tail(tmp_path):
     f = tmp_path / "s.jsonl"
     f.write_bytes(b'{"a": 1}\n{"torn": ')
-    lines, end, _head = si._read_complete_lines(str(f), 0)
+    lines, end = si._read_complete_lines(str(f))
     assert lines == ['{"a": 1}']
     assert end == len(b'{"a": 1}\n')  # torn tail stays unindexed
 
 
-def test_read_complete_lines_resumes_from_offset(tmp_path):
+def test_read_complete_lines_reads_whole_file(tmp_path):
     f = tmp_path / "s.jsonl"
-    first = b'{"a": 1}\n'
-    f.write_bytes(first + b'{"b": 2}\n')
-    lines, end, _head = si._read_complete_lines(str(f), len(first))
-    assert lines == ['{"b": 2}']
+    f.write_bytes(b'{"a": 1}\n{"b": 2}\n')
+    lines, end = si._read_complete_lines(str(f))
+    assert lines == ['{"a": 1}', '{"b": 2}']
     assert end == f.stat().st_size
 
 
@@ -267,7 +213,7 @@ def test_read_complete_lines_only_splits_on_newline(tmp_path):
     text_with_ls = "line\u2028separator"
     f.write_text(json.dumps({"text": text_with_ls}, ensure_ascii=False) + "\n",
                  encoding="utf-8")
-    lines, _end, _head = si._read_complete_lines(str(f), 0)
+    lines, _end = si._read_complete_lines(str(f))
     assert len(lines) == 1
     assert json.loads(lines[0])["text"] == text_with_ls
 
@@ -305,24 +251,6 @@ def test_open_index_rebuilds_when_identity_differs(tmp_path):
     conn = si.open_index(db)
     assert conn.execute("SELECT count(*) FROM fts").fetchone()[0] == 0
     conn.close()
-
-
-# ---------------------------------------------------------------------------
-# tail hash — append-vs-rewrite detection for the indexed region
-# ---------------------------------------------------------------------------
-
-def test_tail_hash_file_matches_bytes(tmp_path):
-    region = b"x" * 3000
-    f = tmp_path / "s.jsonl"
-    f.write_bytes(region + b"unindexed torn tail")
-    assert si._tail_hash(str(f), len(region)) == si._tail_hash_bytes(region)
-
-
-def test_tail_hash_of_short_region(tmp_path):
-    f = tmp_path / "s.jsonl"
-    f.write_bytes(b"short\n")
-    assert si._tail_hash(str(f), 6) == si._tail_hash_bytes(b"short\n")
-    assert si._tail_hash(str(f), 0) == si._tail_hash_bytes(b"")
 
 
 # ---------------------------------------------------------------------------
@@ -364,8 +292,8 @@ def test_open_index_rebuilds_on_schema_version_bump(tmp_path):
 
 def _index_body(conn, path, body, source=si.SOURCE_LLM):
     cur = conn.execute(
-        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes, head_hash, head_len, tail_hash) "
-        "VALUES (?, ?, 1, 1, 1, 1, '', 0, '')", (path, source))
+        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes) "
+        "VALUES (?, ?, 1, 1, 1, 1)", (path, source))
     si._insert_fts_segment(conn, cur.lastrowid, si.searchable_body([body]))
 
 
@@ -384,8 +312,8 @@ def test_candidates_are_superset_for_cross_text_and(tmp_path):
     # as a candidate (rescoring filters it out).
     conn = si.open_index(tmp_path / "index.db")
     cur = conn.execute(
-        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes, head_hash, head_len, tail_hash) "
-        "VALUES ('/a.json', 'llm', 1, 1, 1, 1, '', 0, '')")
+        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes) "
+        "VALUES ('/a.json', 'llm', 1, 1, 1, 1)")
     si._insert_fts_segment(conn, cur.lastrowid,
                            si.searchable_body(["alpha text", "bravo text"]))
     q = si.build_fts_query("alpha bravo", exact=False)
@@ -406,8 +334,8 @@ def test_candidates_respect_source_filter(tmp_path):
 def test_lookup_uuid_roundtrip(tmp_path):
     conn = si.open_index(tmp_path / "index.db")
     cur = conn.execute(
-        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes, head_hash, head_len, tail_hash) "
-        "VALUES ('/a.json', 'llm', 1, 1, 1, 1, '', 0, '')")
+        "INSERT INTO files(path, source, mtime_ns, ctime_ns, size, indexed_bytes) "
+        "VALUES ('/a.json', 'llm', 1, 1, 1, 1)")
     si._insert_item_row(conn, cur.lastrowid, "claude", "me@example.com", {
         "uuid": "u-123", "item_type": "conversation", "name": "n",
         "created_at": "c", "updated_at": "u", "host": "", "cwd": "",

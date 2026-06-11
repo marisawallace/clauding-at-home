@@ -208,6 +208,17 @@ def test_appended_jsonl_line_is_found(full_archive_workspace, repo_root):
     entries = json.loads(_assert_index_matches_scan(repo_root, ws, "-j", "-s", "claude-code"))
     assert entries[0]["updated_at"] == "2026-04-11T09:00:00.000Z"
 
+    # Whole-file re-index, not segment accumulation: the appended file holds
+    # exactly one fts_map row, not one-per-append.
+    import sqlite3
+    conn = sqlite3.connect(ws / "search_index.db")
+    rows = conn.execute(
+        "SELECT count(*) FROM fts_map m JOIN files f ON f.id = m.file_id "
+        "WHERE f.path = ?", (str(session),),
+    ).fetchone()[0]
+    conn.close()
+    assert rows == 1
+
 
 @pytest.mark.integration
 def test_deleted_file_drops_out_of_results(full_archive_workspace, repo_root):
@@ -228,7 +239,7 @@ def test_rewritten_jsonl_head_change_forces_full_reindex(full_archive_workspace,
     _search(repo_root, ws, "virtual environment", "-j")  # build index
 
     # Rewrite the session from scratch with a different head and MORE bytes
-    # than before, so only the head-hash check can tell it isn't an append.
+    # than before: whole-file re-index drops the old rows and reparses.
     session = ws / "claude_code_data/-home-testuser-projects-my-app/cc-test-session-001.jsonl"
     original_size = session.stat().st_size
     lines = [
@@ -270,8 +281,8 @@ def test_rewritten_jsonl_middle_change_forces_full_reindex(full_archive_workspac
     session.write_text(head_line + line("msg-mid", "original middle topic"))
     _search(repo_root, ws, "virtual environment", "-j")  # build index
 
-    # Rewrite: head line byte-identical, middle replaced, file grows — only
-    # the tail hash can tell this from an append.
+    # Rewrite: head line byte-identical, middle replaced, file grows — the
+    # whole file is re-indexed regardless of which bytes changed.
     session.write_text(head_line + line("msg-mid", "replacement nebula topic", "y" * 100))
 
     out = _assert_index_matches_scan(repo_root, ws, "nebula", "-s", "claude-code", "-j")

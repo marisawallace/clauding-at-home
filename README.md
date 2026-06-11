@@ -184,7 +184,7 @@ clauding-at-home/
 
 ## Search index
 
-Search runs on an SQLite FTS5 index that's built automatically on the first run (takes a few seconds) and eagerly, incrementally updated with each search. The index is a pure accelerator: it only narrows which files get scanned, and results are byte-identical to a full scan. Pass `--no-index` for debugging.
+Search runs on an SQLite FTS5 index that's built automatically on the first run (takes a few seconds) and refreshed on each search: every changed file — appended, rewritten, or copied in by sync — is detected by its mtime/ctime/size and re-indexed whole (its old index rows are dropped and the file is re-read from scratch). The index is a pure accelerator: it only narrows which files get scanned, and results are byte-identical to a full scan. Pass `--no-index` for debugging.
 
 The index rebuilds itself if deleted, corrupted, or outdated — including automatically whenever the extraction code changes, so it can never serve results from stale indexing logic.
 
