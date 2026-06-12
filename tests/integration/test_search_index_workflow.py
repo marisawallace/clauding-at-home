@@ -444,6 +444,37 @@ def test_invalid_utf8_jsonl_skipped_and_warned_on_both_paths(full_archive_worksp
 
 
 @pytest.mark.integration
+def test_verify_passes_on_healthy_corpus(full_archive_workspace, repo_root):
+    ws = full_archive_workspace
+    result = _run_cli(repo_root, ws, "full_text_search_chats_archive.py", "Python function", "--verify")
+    assert result.returncode == 0, result.stderr
+    assert "VERIFY OK" in result.stdout
+
+
+@pytest.mark.integration
+def test_verify_detects_tampered_stored_texts(full_archive_workspace, repo_root):
+    # --verify is only meaningful if it actually catches divergence: tamper a
+    # file_texts row so the index path scores different text than the scan path.
+    import sqlite3
+    ws = full_archive_workspace
+    _search(repo_root, ws, "Python function", "-j")  # build index
+
+    conn = sqlite3.connect(ws / "search_index.db")
+    conv_dir = ws / "data/llm_data/claude/claude-test@example.com/conversations"
+    conv_file = next(conv_dir.glob("*Test-Conversation-1*"))
+    fid = conn.execute("SELECT id FROM files WHERE path = ?", (str(conv_file),)).fetchone()[0]
+    # Valid JSON, but different text than the file on disk holds.
+    conn.execute("UPDATE file_texts SET texts = ? WHERE file_id = ?",
+                 (json.dumps(["totally different wumpus text"]), fid))
+    conn.commit()
+    conn.close()
+
+    result = _run_cli(repo_root, ws, "full_text_search_chats_archive.py", "Python function", "--verify")
+    assert result.returncode == 1
+    assert "VERIFY FAILED" in result.stderr
+
+
+@pytest.mark.integration
 def test_corrupt_index_recovers_with_correct_results(full_archive_workspace, repo_root):
     ws = full_archive_workspace
     _search(repo_root, ws, "Python function", "-j")  # build index

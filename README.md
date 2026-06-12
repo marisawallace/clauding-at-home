@@ -184,7 +184,9 @@ clauding-at-home/
 
 ## Search index
 
-Search runs on an SQLite FTS5 index that's built automatically on the first run (takes a few seconds) and refreshed on each search: every changed file — appended, rewritten, or copied in by sync — is detected by its mtime/ctime/size and re-indexed whole (its old index rows are dropped and the file is re-read from scratch). The index is a pure accelerator: it only narrows which files get scanned, and results are byte-identical to a full scan. Pass `--no-index` for debugging.
+Search runs on an SQLite FTS5 index that's built automatically on the first run (takes a few seconds) and refreshed on each search: every changed file — appended, rewritten, or copied in by sync — is detected by its mtime/ctime/size and re-indexed whole (its old index rows are dropped and the file is re-read from scratch). The index stores the extracted texts of each file, so a search scores and snippets straight from the index without re-reading the matched files; a file whose stored texts are missing or unreadable is transparently re-scanned from disk. The index is a pure accelerator: the *set* of results, every score, and every snippet are identical to a full scan. (The one exception: results with *exactly equal* total scores may appear in a different relative order, because the scan path's tie order follows filesystem directory order, which the index can't reconstruct.) Pass `--no-index` for debugging.
+
+Run any query with `--verify` to prove this for yourself: it runs the query through both the index and a full scan, then prints `VERIFY OK` or a field-level diff of any divergence (and exits non-zero).
 
 The index rebuilds itself if deleted, corrupted, or outdated — including automatically whenever the extraction code changes, so it can never serve results from stale indexing logic.
 

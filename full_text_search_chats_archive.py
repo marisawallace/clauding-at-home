@@ -902,29 +902,94 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False, 
             print(f"{Colors.DIM}{'─' * 80}{Colors.RESET}\n")
 
 
+def result_to_entry(result: SearchResult) -> dict:
+    """The JSON-serializable dict for one result. Shared by print_json and the
+    --verify canonicalizer so both compare the exact published shape."""
+    entry = {
+        "type": result.type,
+        "uuid": result.uuid,
+        "name": result.name,
+        "created_at": result.created_at,
+        "updated_at": result.updated_at,
+        "email": result.email,
+        "provider": result.provider,
+        "url": result.get_provider_url(),
+        "filepath": str(result.filepath),
+        "total_score": result.total_score,
+        "match_count": len(result.matches),
+        "matches": [{"text": m.text, "score": m.score} for m in result.matches],
+    }
+    if result.extra:
+        entry["extra"] = result.extra
+    return entry
+
+
 def print_json(results: List[SearchResult]):
     """Print results as JSON."""
-    output = []
-    for result in results:
-        entry = {
-            "type": result.type,
-            "uuid": result.uuid,
-            "name": result.name,
-            "created_at": result.created_at,
-            "updated_at": result.updated_at,
-            "email": result.email,
-            "provider": result.provider,
-            "url": result.get_provider_url(),
-            "filepath": str(result.filepath),
-            "total_score": result.total_score,
-            "match_count": len(result.matches),
-            "matches": [{"text": m.text, "score": m.score} for m in result.matches],
-        }
-        if result.extra:
-            entry["extra"] = result.extra
-        output.append(entry)
+    print(json.dumps([result_to_entry(r) for r in results], indent=2, ensure_ascii=False))
 
-    print(json.dumps(output, indent=2, ensure_ascii=False))
+
+def canonical_entries(results: List[SearchResult]) -> List[dict]:
+    """Results as serialized entries, ordered by (-total_score, filepath) — the
+    one canonical order both pipelines can agree on (filesystem readdir order,
+    which breaks score ties on the scan path, is not reconstructable from the
+    index). Recency boost must be disabled by the caller so wall-clock skew
+    between the two runs can't create float diffs."""
+    ordered = sorted(results, key=lambda r: (-r.total_score, str(r.filepath)))
+    return [result_to_entry(r) for r in ordered]
+
+
+def verify_diff(index_entries: List[dict], scan_entries: List[dict]) -> str:
+    """Readable field-level diff between two canonicalized entry lists."""
+    lines = ["VERIFY FAILED: index and scan results diverge"]
+    idx_by = {e["filepath"]: e for e in index_entries}
+    scan_by = {e["filepath"]: e for e in scan_entries}
+    for p in sorted(set(idx_by) - set(scan_by)):
+        lines.append(f"  only in index: {p}")
+    for p in sorted(set(scan_by) - set(idx_by)):
+        lines.append(f"  only in scan:  {p}")
+    for p in sorted(set(idx_by) & set(scan_by)):
+        ie, se = idx_by[p], scan_by[p]
+        for key in sorted(set(ie) | set(se)):
+            if ie.get(key) != se.get(key):
+                lines.append(f"  {p}: {key}: index={ie.get(key)!r} scan={se.get(key)!r}")
+    return "\n".join(lines)
+
+
+def gather_query_results(use_index, index_conn, data_dir, cc_sources, query, exact, source):
+    """Combined query results for the selected sources, recency boost disabled.
+    use_index picks the index-backed rescore path or the full scan; --verify
+    runs both and compares."""
+    results: List[SearchResult] = []
+    if source in ("all", "llm"):
+        if use_index:
+            results += search_llm_with_index(index_conn, data_dir, query, exact, False)
+        else:
+            results += search_archive(data_dir, query, apply_recency_boost=False, exact=exact)
+    if source in ("all", "claude-code") and cc_sources:
+        if use_index:
+            results += search_cc_with_index(index_conn, cc_sources, query, exact, False)
+        else:
+            results += search_claude_code_archive(cc_sources, query, apply_recency_boost=False, exact=exact)
+    return results
+
+
+def run_verify(index_conn, data_dir, cc_sources, query, exact, source) -> int:
+    """Run a query through both the index and scan pipelines and diff the
+    canonicalized results. Returns a process exit code (0 = identical). This is
+    the standing proof that the index is a pure accelerator, not a source of
+    divergent answers."""
+    import search_index
+    with search_index.read_snapshot(index_conn):
+        index_results = gather_query_results(True, index_conn, data_dir, cc_sources, query, exact, source)
+    scan_results = gather_query_results(False, None, data_dir, cc_sources, query, exact, source)
+    index_entries = canonical_entries(index_results)
+    scan_entries = canonical_entries(scan_results)
+    if index_entries == scan_entries:
+        print(f"VERIFY OK ({len(index_entries)} results)")
+        return 0
+    print(verify_diff(index_entries, scan_entries), file=sys.stderr)
+    return 1
 
 
 def open_in_editor(results: List[SearchResult], count: int, config: dict):
@@ -1096,6 +1161,12 @@ Examples:
         help="Discard and rebuild the search index from scratch before searching (use if you suspect it is stale)"
     )
 
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run the query through both the index and a full scan and diff the results; prints VERIFY OK or a field-level diff and exits (proves the index is a pure accelerator)"
+    )
+
     args = parser.parse_args()
 
     # --stats reports over the whole archive, so it ignores any query and
@@ -1148,6 +1219,18 @@ Examples:
                 index_conn = None
             elif failed_files:
                 print(unreadable_files_banner(failed_files), file=sys.stderr)
+
+    # --verify: prove the index path and the full scan agree for this query,
+    # then exit. Needs the index (so --no-index is meaningless here) and a query.
+    if args.verify:
+        if index_conn is None:
+            print("Error: --verify requires the search index (drop --no-index).", file=sys.stderr)
+            sys.exit(2)
+        if not query:
+            print("Error: --verify requires a query.", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(run_verify(index_conn, data_dir, parse_claude_code_sources(config),
+                            query, args.exact, args.source))
 
     index_browse = index_conn is not None and no_query
     index_query = index_conn is not None and bool(query)
