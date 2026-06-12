@@ -207,14 +207,16 @@ def prettify_model(model: str) -> str:
 
     claude-opus-4-8         -> Opus 4.8
     claude-sonnet-4-5-2025… -> Sonnet 4.5
+    claude-fable-5          -> Fable 5
     gpt-4o                  -> GPT-4o
     Unknown shapes pass through unchanged. Empty in, empty out."""
     if not model:
         return ""
-    m = re.match(r"claude-(opus|sonnet|haiku)-(\d+)-(\d+)", model)
+    m = re.match(r"claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?", model)
     if m:
         family, major, minor = m.group(1), m.group(2), m.group(3)
-        return f"{family.capitalize()} {major}.{minor}"
+        version = major if minor is None else f"{major}.{minor}"
+        return f"{family.capitalize()} {version}"
     if model.startswith("gpt-"):
         return "GPT-" + model[len("gpt-"):]
     return model
