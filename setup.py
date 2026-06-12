@@ -277,26 +277,42 @@ def _xdg_download_dir() -> str:
     return candidate
 
 
-def _checkbox_prompt(labels: list[str], descriptions: dict[str, str]) -> list[str]:
+def _checkbox_prompt(
+    labels: list[str],
+    descriptions: dict[str, str],
+    default_checked: set[str] | None = None,
+) -> list[str]:
     """Tiny dependency-free multi-select. Returns the chosen labels.
 
-    Numbered-toggle UI (works on any TTY and degrades gracefully): all items
-    start checked; the user types numbers to toggle, then Enter to confirm.
-    Non-interactive stdin -> everything stays checked.
+    Numbered-toggle UI (works on any TTY and degrades gracefully): the user
+    types a number to flip that item's checkbox, then a bare Enter to confirm.
+    `default_checked` is the set of labels that start checked (None = all).
+    Non-interactive stdin -> the default-checked set is returned as-is.
     """
-    checked = {label: True for label in labels}
+    checked = {
+        label: (default_checked is None or label in default_checked)
+        for label in labels
+    }
     if not sys.stdin.isatty():
-        return list(labels)
+        return [label for label in labels if checked[label]]
 
     while True:
         print()
         for i, label in enumerate(labels, 1):
             box = f"{GREEN}[x]{RESET}" if checked[label] else "[ ]"
             print(f"  {box} {i}. {label}  {DIM}{descriptions.get(label, '')}{RESET}")
+        # Two distinct actions, spelled out because it wasn't obvious that a
+        # number toggles (rather than confirms) and that confirm is a bare Enter.
+        print(
+            f"  {DIM}Type a number and press Enter to check/uncheck that item "
+            f"(e.g. '2'; space-separated for several: '1 3').{RESET}"
+        )
+        print(
+            f"  {DIM}Press Enter on an empty line to confirm the checked items "
+            f"above.{RESET}"
+        )
         try:
-            raw = input(
-                "  Toggle by number (space/comma separated), or Enter to confirm: "
-            ).strip()
+            raw = input("  > ").strip()
         except EOFError:
             raw = ""
         if not raw:
@@ -382,26 +398,36 @@ def _readable_dotfiles() -> list[tuple[Path, str, str]]:
     return out
 
 
-def _choose_dotfile(
-    existing: list[tuple[Path, str, str]], yes: bool
-) -> tuple[Path, str, str]:
-    """Pick which dotfile to write to, biased toward the current shell's rc."""
-    cur_shell = _infer_shell_name(dict(os.environ))
-    ordered = sorted(existing, key=lambda t: (t[1] != cur_shell,))
-    default = ordered[0]
-    if yes or len(existing) == 1:
-        return default
-    print("\n  Which file should aliases be written to?")
-    for i, (p, _shell, _text) in enumerate(ordered, 1):
-        marker = f" {DIM}(current shell){RESET}" if _shell == cur_shell else ""
-        print(f"    {i}. {p}{marker}")
-    try:
-        raw = input(f"  [default: {CYAN}{default[0]}{RESET}] ").strip()
-    except EOFError:
-        raw = ""
-    if raw.isdigit() and 1 <= int(raw) <= len(ordered):
-        return ordered[int(raw) - 1]
-    return default
+def canonical_dotfile_targets(
+    existing: list[tuple[Path, str, str]], cur_shell: str
+) -> tuple[tuple[Path, str, str], list[tuple[Path, str, str]]]:
+    """Collapse existing dotfiles to one canonical rc per shell.
+
+    `existing` is in CANDIDATE_DOTFILES preference order, so the first file
+    seen for a given shell tag is that shell's canonical rc — .bashrc beats
+    .bash_profile for bash, etc. Returns (current, others):
+
+      current  the (path, shell, text) to write to by default: the current
+               shell's rc if present, else ~/.profile, else the first file.
+      others   canonical rcs for *other* real shells (non-empty tag, not the
+               current shell) — distinct parallel shells the user might also
+               want aliases in. Empty in the common single-shell case, which
+               is the signal to auto-pick `current` without prompting.
+
+    Why fold ~/.profile into `current` instead of offering it: it's the login
+    fallback bash reads only when no .bash_profile/.bashrc exists, never a
+    separate shell worth a second copy of the aliases.
+    """
+    canonical: dict[str, tuple[Path, str, str]] = {}
+    for entry in existing:
+        canonical.setdefault(entry[1], entry)
+    current = canonical.get(cur_shell) or canonical.get("") or existing[0]
+    others = [
+        entry
+        for shell, entry in canonical.items()
+        if shell and shell != cur_shell and entry != current
+    ]
+    return current, others
 
 
 def _choose_alias_name(
@@ -440,6 +466,33 @@ def _choose_alias_name(
         return name
 
 
+def _choose_alias_targets(
+    existing: list[tuple[Path, str, str]], yes: bool
+) -> list[tuple[Path, str, str]]:
+    """Which dotfile(s) to write aliases to.
+
+    Common case (one shell): auto-pick the current shell's rc, no prompt. Only
+    when a *different* shell's rc is also present do we surface a multi-select,
+    defaulting to just the current shell but letting the user tick the others.
+    """
+    cur_shell = _infer_shell_name(dict(os.environ))
+    current, others = canonical_dotfile_targets(existing, cur_shell)
+    if yes or not others or not sys.stdin.isatty():
+        return [current]
+
+    targets = [current, *others]
+    labels = [str(p) for p, _, _ in targets]
+    descriptions = {
+        str(p): ("current shell" if shell == cur_shell else f"{shell} config")
+        for p, shell, _ in targets
+    }
+    print("\n  You have config files for more than one shell. Pick where to")
+    print("  write the aliases (the current shell's file is checked by default):")
+    by_label = {label: entry for label, entry in zip(labels, targets)}
+    chosen = _checkbox_prompt(labels, descriptions, default_checked={labels[0]})
+    return [by_label[label] for label in chosen] or [current]
+
+
 def step_aliases(repo_root: Path, yes: bool) -> None:
     print(f"\n{BOLD}4. Shell aliases{RESET}")
     existing = _readable_dotfiles()
@@ -452,7 +505,7 @@ def step_aliases(repo_root: Path, yes: bool) -> None:
         print(f"  {DIM}Skipped aliases.{RESET}")
         return
 
-    dotfile, _shell, _text = _choose_dotfile(existing, yes)
+    targets = _choose_alias_targets(existing, yes)
     all_texts = [text for _, _, text in existing]
     name = _choose_alias_name(all_texts, yes, repo_root)
 
@@ -469,37 +522,42 @@ def step_aliases(repo_root: Path, yes: bool) -> None:
         "sync-chatgpt": lines["sync-chatgpt"],
     }
 
-    print(f"\n{BOLD}  Planned aliases{RESET} (write to {CYAN}{dotfile}{RESET}):")
+    target_names = ", ".join(str(p) for p, _, _ in targets)
+    print(f"\n{BOLD}  Planned aliases{RESET} (write to {CYAN}{target_names}{RESET}):")
     for label in labels:
         print(f"    {label_to_line[label]}")
 
     if yes:
         chosen = labels
     else:
+        print(f"\n  {DIM}Choose which aliases to add:{RESET}")
         chosen = _checkbox_prompt(labels, descriptions)
 
     if not chosen:
         print(f"  {DIM}No aliases selected — skip.{RESET}")
         return
-
-    dotfile_text = _read_dotfile_text(dotfile)
-    if dotfile_text is None:
-        return
     selected_lines = [label_to_line[label] for label in chosen]
-    append = assemble_alias_append(dotfile_text, selected_lines)
-    if not append:
-        print(f"  {DIM}All selected aliases already present — skip.{RESET}")
-        return
 
-    if not yes and not _prompt_yn(f"  Append these to {dotfile.name}?", default=True):
-        print(f"  {DIM}Skipped writing aliases.{RESET}")
-        return
+    wrote_any = False
+    for dotfile, _shell, _text in targets:
+        dotfile_text = _read_dotfile_text(dotfile)
+        if dotfile_text is None:
+            continue
+        append = assemble_alias_append(dotfile_text, selected_lines)
+        if not append:
+            print(f"  {DIM}All selected aliases already present in {dotfile.name} — skip.{RESET}")
+            continue
+        if not yes and not _prompt_yn(f"  Append these to {dotfile.name}?", default=True):
+            print(f"  {DIM}Skipped writing to {dotfile.name}.{RESET}")
+            continue
+        _backup(dotfile)
+        with dotfile.open("a", encoding="utf-8") as f:
+            f.write(append)
+        print(f"  {GREEN}✓{RESET} Added alias(es) to {dotfile}")
+        wrote_any = True
 
-    _backup(dotfile)
-    with dotfile.open("a", encoding="utf-8") as f:
-        f.write(append)
-    print(f"  {GREEN}✓{RESET} Added alias(es) to {dotfile}")
-    print(f"  {DIM}Run `source {dotfile}` or open a new shell to use them.{RESET}")
+    if wrote_any:
+        print(f"  {DIM}Run `source <dotfile>` or open a new shell to use them.{RESET}")
 
 
 def step_editor(yes: bool) -> None:
@@ -527,7 +585,8 @@ def step_editor(yes: bool) -> None:
     if not existing:
         print(f"  {YELLOW}!{RESET} No usable dotfiles found — skipping.")
         return
-    dotfile, shell, dotfile_text = _choose_dotfile(existing, yes)
+    current, _others = canonical_dotfile_targets(existing, _infer_shell_name(dict(os.environ)))
+    dotfile, shell, dotfile_text = current
     value = _prompt_text("  What editor command?", "vim")
     line = export_editor_line(value, shell)
 
