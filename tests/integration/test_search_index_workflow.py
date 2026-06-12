@@ -343,6 +343,31 @@ def test_wrong_shape_json_warns_instead_of_crashing(full_archive_workspace, repo
         assert "conv-uuid-001" not in result.stdout
 
 @pytest.mark.integration
+def test_invalid_utf8_jsonl_skipped_and_warned_on_both_paths(full_archive_workspace, repo_root):
+    # A JSONL with an invalid UTF-8 byte must be skipped identically by the
+    # index path (strict decode in _read_complete_lines) and the scan path
+    # (strict-UTF-8 open in claude_code_parser.parse_jsonl): no rows indexed,
+    # the file contributes nothing to results, and both warn.
+    ws = full_archive_workspace
+    bad = ws / "claude_code_data/-home-testuser-projects-my-app/cc-bad-utf8.jsonl"
+    line = json.dumps({
+        "type": "user",
+        "message": {"role": "user", "content": "zeppelin SEARCHMARKER content"},
+        "uuid": "msg-badutf8", "timestamp": "2026-04-12T09:00:00.000Z",
+        "cwd": "/home/testuser/projects/my-app",
+        "sessionId": "cc-bad-utf8", "gitBranch": "main",
+    })
+    bad.write_bytes(line.encode("utf-8") + b"\xff\xfe invalid\n")
+
+    for extra in ([], ["--no-index"]):
+        result = _run_cli(repo_root, ws, "full_text_search_chats_archive.py",
+                          "SEARCHMARKER", "-j", *extra)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == []
+        assert "cc-bad-utf8.jsonl" in result.stderr
+
+
+@pytest.mark.integration
 def test_corrupt_index_recovers_with_correct_results(full_archive_workspace, repo_root):
     ws = full_archive_workspace
     _search(repo_root, ws, "Python function", "-j")  # build index

@@ -555,6 +555,12 @@ def _read_complete_lines(path: str) -> tuple[list[str], int]:
     A torn trailing line (active session mid-write) stays unindexed; the
     returned end offset only covers complete lines, so the next reconcile
     picks the line up once its newline lands.
+
+    Decoding is strict UTF-8: an invalid byte raises UnicodeDecodeError,
+    which the caller treats as an unreadable file (skip + warn). This matches
+    the scan path (claude_code_parser.parse_jsonl opens strict-UTF-8); a
+    lenient errors="replace" here would silently index mojibake the scan path
+    refuses to read.
     """
     with open(path, "rb") as f:
         buf = f.read()
@@ -563,8 +569,10 @@ def _read_complete_lines(path: str) -> tuple[list[str], int]:
         return [], 0
     # Split on byte-\n only: str.splitlines() also breaks on  /\x85
     # etc., which are legal inside JSON strings and would shred valid lines.
+    # A 0x0a byte is never part of a multibyte UTF-8 sequence, so splitting
+    # before decoding cannot tear a character.
     complete = buf[:last_nl]
-    lines = [seg.decode("utf-8", errors="replace") for seg in complete.split(b"\n")]
+    lines = [seg.decode("utf-8") for seg in complete.split(b"\n")]
     return lines, last_nl + 1
 
 
@@ -642,7 +650,10 @@ def _index_cc_file(conn: sqlite3.Connection, fs: FileStat) -> Optional[str]:
     (unreadable file; retried and re-warned every run, like LLM files)."""
     try:
         raw_lines, end_offset = _read_complete_lines(fs.path)
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
+        # Invalid UTF-8 is treated like an unreadable file: no index rows, the
+        # path is returned as failed (loud banner every run), exactly as the
+        # scan path's strict-UTF-8 open skips-and-warns the whole file.
         print(f"Warning: could not index {fs.path}: {e}", file=sys.stderr)
         return fs.path
     lines = parse_jsonl_texts(raw_lines, fs.path)
