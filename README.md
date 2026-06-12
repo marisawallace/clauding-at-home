@@ -49,10 +49,10 @@ alias cs-sync-claude="python3 $CODE_HOME/clauding-at-home/sync_local_chats_archi
 alias cs-sync-chatgpt="python3 $CODE_HOME/clauding-at-home/sync_local_chats_archive.py --chatgpt"
 ```
 
-Make sure you have $EDITOR set.
+Make sure you have $EDITOR set. It'll be used to open chats in Markdown (hit v on a search result).
 
 ```
-export VISUAL=code
+export VISUAL="code --wait"
 export EDITOR="$VISUAL"
 ```
 
