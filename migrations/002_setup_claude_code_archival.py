@@ -407,7 +407,7 @@ def main():
 
     if not args.yes:
         print(f"\n{YELLOW}This will modify {SETTINGS_PATH} and {env_path}.{RESET}")
-        print(f"{YELLOW}A timestamped backup of settings.json will be made before writing.{RESET}")
+        print(f"{YELLOW}Timestamped backups will be made before writing (*.bak.TIMESTAMP).{RESET}")
         answer = input("Proceed? [y/N] ").strip().lower()
         if answer not in ("y", "yes"):
             print("Aborted.")
@@ -434,6 +434,11 @@ def main():
     # 2. .env
     if env_action != "unchanged" or host_action != "unchanged":
         env_path.touch(exist_ok=True)
+        if env_path.exists() and env_path.stat().st_size > 0:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup = env_path.with_suffix(f".bak.{ts}")
+            backup.write_text(env_path.read_text())
+            print(f"  {GREEN}✓{RESET} Backed up .env → {backup.name}")
     if host_action != "unchanged":
         result = upsert_env_scalar(env_path, CLAUDE_CODE_HOST_ENV_KEY, hostname)
         print(f"  {GREEN}✓{RESET} .env CLAUDE_CODE_HOST: {result}")
