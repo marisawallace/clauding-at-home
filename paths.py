@@ -20,8 +20,9 @@ so unlike the directories above it deliberately lives OUTSIDE data/ — cloud
 sync tools corrupt SQLite files. Default: $XDG_CACHE_HOME (or ~/.cache)
 /clauding-at-home/index.db.
 
-DATA_DIR is the deprecated former name of LLM_DATA_DIR; it is still honored
-(with a deprecation warning) so existing .env files keep working.
+DATA_DIR was the former name of LLM_DATA_DIR. It is no longer supported: a
+DATA_DIR entry in .env now raises so a stale override can't silently point
+the tool at the wrong directory. Rename it to LLM_DATA_DIR.
 
 This module is the single source of truth for resolving path-related
 environment variables. Entry points should call `resolve_data_dir`,
@@ -33,7 +34,6 @@ from __future__ import annotations
 import os
 import re
 import socket
-import sys
 from pathlib import Path
 
 # Single sync root - everything lives under here
@@ -106,16 +106,15 @@ def _resolve_dir(
 def resolve_data_dir(script_dir: Path, config: dict) -> Path:
     """Return the llm_data directory, honoring LLM_DATA_DIR from .env.
 
-    DATA_DIR is the deprecated former name. If LLM_DATA_DIR is unset but
-    DATA_DIR is set, we honor DATA_DIR and emit a one-line deprecation
-    warning to stderr. If both are set, LLM_DATA_DIR wins.
+    DATA_DIR was the former name of this key. It is no longer supported: if
+    it is set in .env, we raise rather than silently ignore it, so a stale
+    override can't point the tool at the wrong directory.
     """
-    if not (config.get("LLM_DATA_DIR") or "").strip() and (config.get("DATA_DIR") or "").strip():
-        print(
-            "Warning: DATA_DIR in .env is deprecated; rename it to LLM_DATA_DIR.",
-            file=sys.stderr,
+    if (config.get("DATA_DIR") or "").strip():
+        raise SystemExit(
+            "DATA_DIR in .env is no longer supported; rename it to LLM_DATA_DIR. "
+            "See .env.example for the current configuration keys."
         )
-        return _resolve_dir(config, "DATA_DIR", script_dir, LLM_DATA_SUBDIR)
     return _resolve_dir(config, "LLM_DATA_DIR", script_dir, LLM_DATA_SUBDIR)
 
 

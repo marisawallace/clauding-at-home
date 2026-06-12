@@ -292,9 +292,9 @@ def main():
         hostname = answer or default_host
 
     # Place this host's archive under llm_data per the claude-code/<host>
-    # convention, but honor an LLM_DATA_DIR override (or the deprecated
-    # DATA_DIR alias) from .env so relocating llm_data carries the archives
-    # with it instead of stranding them at the hardcoded default.
+    # convention, but honor an LLM_DATA_DIR override from .env so relocating
+    # llm_data carries the archives with it instead of stranding them at the
+    # hardcoded default.
     archive_dir = resolve_data_dir(repo_root, existing_env) / "claude-code" / hostname
     command = hook_command(repo_root)
 

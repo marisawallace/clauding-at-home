@@ -21,18 +21,21 @@ def test_defaults_to_data_llm_data_when_unset():
     assert paths.resolve_data_dir(SCRIPT_DIR, {}) == SCRIPT_DIR / "data" / "llm_data"
 
 
-def test_data_dir_alias_is_honored_with_warning(capsys):
+def test_legacy_data_dir_raises():
+    import pytest
+
     config = {"DATA_DIR": "/legacy/llm_data"}
-    result = paths.resolve_data_dir(SCRIPT_DIR, config)
-    assert result == Path("/legacy/llm_data")
-    assert "DATA_DIR" in capsys.readouterr().err  # deprecation warning on stderr
+    with pytest.raises(SystemExit) as exc:
+        paths.resolve_data_dir(SCRIPT_DIR, config)
+    assert "LLM_DATA_DIR" in str(exc.value)
 
 
-def test_llm_data_dir_wins_over_legacy_alias(capsys):
+def test_legacy_data_dir_raises_even_with_llm_data_dir_set():
+    import pytest
+
     config = {"LLM_DATA_DIR": "/new/llm_data", "DATA_DIR": "/legacy/llm_data"}
-    result = paths.resolve_data_dir(SCRIPT_DIR, config)
-    assert result == Path("/new/llm_data")
-    assert capsys.readouterr().err == ""  # no warning when new key is set
+    with pytest.raises(SystemExit):
+        paths.resolve_data_dir(SCRIPT_DIR, config)
 
 
 def test_search_index_db_is_honored():
