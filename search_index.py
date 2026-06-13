@@ -36,7 +36,7 @@ from collections import Counter
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 
 import claude_code_parser as ccp
 
@@ -305,6 +305,43 @@ def make_cc_item_meta(metadata: dict, texts: list[str]) -> dict:
     }
 
 
+class TranscriptParser(Protocol):
+    """The interface a local-CLI transcript parser exposes (claude_code_parser
+    today; codex_parser next). A plain module satisfies it by defining these as
+    top-level functions. The indexer below uses the first three; the viewer and
+    search CLI also call extract_conversation_turns / find_session_file."""
+    extract_searchable_text: Callable[[list], list]
+    extract_session_metadata: Callable[[list], dict]
+    count_tool_uses: Callable[[list], "Counter"]
+    extract_conversation_turns: Callable[[list], list]
+    find_session_file: Callable[..., object]
+
+
+@dataclass(frozen=True)
+class _TranscriptIndexer:
+    """How to index one family of append-only JSONL transcripts (Claude Code,
+    Codex). The same parser/meta handle a source's searchable files and, where a
+    tool-counts-only variant exists, its non-searchable files; only files whose
+    source == `searchable` get fts/items rows."""
+    provider: str                              # items.provider value
+    parser: TranscriptParser                   # module of extractor functions
+    meta_builder: Callable[[dict, list], dict]  # make_*_item_meta
+    searchable: str                            # the source that gets fts/items
+
+
+# Source -> how to index it. Claude Code's searchable transcripts (SOURCE_CC)
+# and tool-counts-only files (SOURCE_CC_TOOLS) share one indexer; a tools-only
+# file just skips the fts/items rows (its fs.source != indexer.searchable).
+# Adding Codex is: a codex_parser module + make_codex_item_meta + entries here.
+_CC_INDEXER = _TranscriptIndexer("claude-code", ccp, make_cc_item_meta, SOURCE_CC)
+_TRANSCRIPT_INDEXERS: dict = {
+    SOURCE_CC: _CC_INDEXER,
+    SOURCE_CC_TOOLS: _CC_INDEXER,
+}
+# Sources that follow the append-only transcript re-index rule in diff_index.
+_TRANSCRIPT_SOURCES = frozenset(_TRANSCRIPT_INDEXERS)
+
+
 def diff_index(disk: list[FileStat], indexed: list[IndexedFile]) -> ReconcilePlan:
     """Pure diff between the filesystem and the files table.
 
@@ -328,7 +365,7 @@ def diff_index(disk: list[FileStat], indexed: list[IndexedFile]) -> ReconcilePla
         # mtime is kept for filesystems with unreliable ctime (NFS/SMB/FAT).
         stat_changed = (fs.mtime_ns != ix.mtime_ns or fs.ctime_ns != ix.ctime_ns
                         or fs.size != ix.size)
-        if fs.source in (SOURCE_CC, SOURCE_CC_TOOLS):
+        if fs.source in _TRANSCRIPT_SOURCES:
             # Append-only transcripts re-index whole on any change. An
             # unchanged stat with size > indexed_bytes means the last scan saw
             # a torn trailing line — re-index until the newline lands.
@@ -688,9 +725,14 @@ def _index_llm_file(conn: sqlite3.Connection, fs: FileStat,
     return None
 
 
-def _index_cc_file(conn: sqlite3.Connection, fs: FileStat) -> Optional[str]:
-    """Index one Claude Code JSONL transcript. Returns the path on failure
-    (unreadable file; retried and re-warned every run, like LLM files)."""
+def _index_transcript_file(conn: sqlite3.Connection, fs: FileStat,
+                           indexer: _TranscriptIndexer) -> Optional[str]:
+    """Index one append-only JSONL transcript via `indexer`. Returns the path on
+    failure (unreadable file; retried and re-warned every run, like LLM files).
+
+    The reader (_read_complete_lines, strict-UTF-8 + torn-trailing-line aware)
+    and the JSONL parse stay here — only the per-provider text/metadata/tool
+    extraction is injected via the indexer's parser and meta_builder."""
     try:
         raw_lines, end_offset = _read_complete_lines(fs.path)
     except (OSError, UnicodeDecodeError) as e:
@@ -701,14 +743,14 @@ def _index_cc_file(conn: sqlite3.Connection, fs: FileStat) -> Optional[str]:
         return fs.path
     lines = parse_jsonl_texts(raw_lines, fs.path)
     file_id = _insert_file_row(conn, fs, end_offset)
-    if fs.source == SOURCE_CC:
-        texts = ccp.extract_searchable_text(lines)
-        meta = make_cc_item_meta(ccp.extract_session_metadata(lines), texts)
+    if fs.source == indexer.searchable:
+        texts = indexer.parser.extract_searchable_text(lines)
+        meta = indexer.meta_builder(indexer.parser.extract_session_metadata(lines), texts)
         meta["host"] = fs.host
         _insert_fts_segment(conn, file_id, searchable_body(texts))
         _insert_file_texts(conn, file_id, texts)
-        _insert_item_row(conn, file_id, "claude-code", fs.email, meta)
-    for tool, count in ccp.count_tool_uses(lines).items():
+        _insert_item_row(conn, file_id, indexer.provider, fs.email, meta)
+    for tool, count in indexer.parser.count_tool_uses(lines).items():
         conn.execute(
             "INSERT INTO cc_tool_counts(file_id, tool, count) VALUES (?, ?, ?)",
             (file_id, tool, count),
@@ -784,7 +826,7 @@ def reconcile(conn: sqlite3.Connection, plan: ReconcilePlan,
 def _index_file(conn, fs: FileStat, extract_llm_texts, extract_llm_model) -> Optional[str]:
     if fs.source == SOURCE_LLM:
         return _index_llm_file(conn, fs, extract_llm_texts, extract_llm_model)
-    return _index_cc_file(conn, fs)
+    return _index_transcript_file(conn, fs, _TRANSCRIPT_INDEXERS[fs.source])
 
 
 def refresh(conn: sqlite3.Connection, data_dir: Path,
