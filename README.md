@@ -177,6 +177,11 @@ Default location is `~/.cache/scrying-at-home/index.db`. You can change this in 
 
 ## Known Limitations
 
+### Google Gemini
+
+Google's only bulk export of Gemini chats — Takeout → "My Activity" → "Gemini Apps" — is a flat list of individual prompt→response turns, with no thread ID and no account identity. This is why we currently don't support Gemini.
+
+
 ### Conversation forks (Claude.ai)
 
 The official Claude.ai data export **does not fully preserve forked conversations**. Specifically:
