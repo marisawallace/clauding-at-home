@@ -11,10 +11,12 @@ new provider slots in by adding ONE descriptor entry (+ a parser module),
 rather than threading a branch through every layer.
 
 Leaf-module discipline (mirrors claude_code_parser): this module imports only
-the stdlib and is imported directly by everything else, INCLUDING search_index
-(which must not import full_text_search_chats_archive — it runs as __main__).
-So every function here takes PRIMITIVES (provider id, uuid, cwd, host,
-item_type), never a SearchResult. Display constants that also live elsewhere
+the stdlib, so anything can depend on it — today the search CLI, picker, viewer,
+analytics, and exporter do. The leaf constraint is also forward-looking: it
+keeps the module importable by search_index (which must NOT import
+full_text_search_chats_archive — it runs as __main__) once Codex needs provider
+facts there. So every function here takes PRIMITIVES (provider id, uuid, cwd,
+host, item_type), never a SearchResult. Display constants that also live elsewhere
 (e.g. the claude-code ANSI orange, == full_text_search_chats_archive.Colors.ORANGE)
 are duplicated here as literals rather than imported, to keep this a leaf.
 
@@ -38,6 +40,16 @@ class Provider:
     The three label fields are deliberately distinct — the same provider is
     rendered differently in different contexts, and each rendering is pinned by
     a characterization test, so they must not be collapsed into one field.
+
+    Forward-looking fields: `kind` and `account_slot` are descriptor facts with
+    no consumer yet — they exist to drive the data-routing branches that still
+    hard-code `provider == "claude-code"` (analytics' host/cwd breakdowns in
+    analytics.py, view_conversation.render_conversation's renderer dispatch,
+    export_archive.export_group). Those are intentionally OUT of this module's
+    display/action scope today. But when Codex lands — also kind == "local-cli",
+    also carrying cwd/host — each of those literal `== "claude-code"` sites must
+    switch to a `kind`/`account_slot` test, or Codex sessions get silently
+    misrouted (dropped from the host/cwd analytics, sent down the wrong renderer).
     """
     id: str               # canonical id, also the SearchResult.provider value
     badge_label: str      # picker + print_results header, e.g. "CLAUDE CODE"
