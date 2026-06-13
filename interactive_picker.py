@@ -22,6 +22,7 @@ import sys
 import webbrowser
 from typing import List
 
+import providers
 import vendor_loader  # noqa: F401 — side-effect: prepend vendor/ to sys.path
 from prompt_toolkit import Application
 from prompt_toolkit.application import get_app
@@ -283,12 +284,12 @@ def act_on_choice(result, current_host: str, demo: bool = False) -> int:
         if not demo and current_host and host and host != current_host:
             # Different host — can't resume here. Print the command for the user.
             print(f"\nThis session lives on host '{host}'. Resume there with:\n", file=sys.stderr)
-            print(f"  pushd {shlex.quote(cwd)} && claude -r {result.uuid}\n")
+            print(f"  pushd {shlex.quote(cwd)} && {providers.resume_shell(result.provider, result.uuid)}\n")
             return 0
 
         if not os.path.isdir(cwd):
             print(f"\nWorking directory no longer exists: {cwd}", file=sys.stderr)
-            print(f"Resume command: claude -r {result.uuid}")
+            print(f"Resume command: {providers.resume_shell(result.provider, result.uuid)}")
             return 1
 
         # Run claude as a child in `cwd` rather than chdir-ing this process.
@@ -296,7 +297,7 @@ def act_on_choice(result, current_host: str, demo: bool = False) -> int:
         # exits the user is back where they ran the search — same end-state as
         # `pushd ... && claude -r ... && popd`, without needing the shell at all.
         try:
-            proc = subprocess.run(["claude", "-r", result.uuid], cwd=cwd)
+            proc = subprocess.run(providers.resume_cli_args(result.provider, result.uuid), cwd=cwd)
             return proc.returncode
         except FileNotFoundError:
             print("Error: `claude` CLI not found on PATH.", file=sys.stderr)

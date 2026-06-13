@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import providers
 from paths import (
     CLAUDE_CODE_HOST_ENV_KEY,
     CLAUDE_CODE_SOURCES_ENV_KEY,
@@ -909,7 +910,7 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False, 
             resume_color = Colors.ORANGE
             if current_host and host and host != current_host:
                 resume_color = Colors.DIM
-            print(f"{resume_color}pushd {shlex.quote(cwd)} && claude -r {result.uuid}{Colors.RESET}")
+            print(f"{resume_color}pushd {shlex.quote(cwd)} && {providers.resume_shell(result.provider, result.uuid)}{Colors.RESET}")
         else:
             model_label = prettify_model(result.model)
             model_segment = f"{model_label} | " if model_label else ""

@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import providers
 from paths import resolve_data_dir, resolve_local_views_dir, parse_claude_code_sources, resolve_env_path, load_env_file, open_in_editor
 
 CLAUDE_CHAT_URL_PREFIX = "https://claude.ai/chat/"
@@ -502,7 +503,8 @@ def claude_code_to_markdown(filepath: Path) -> str:
         parts.append(f"**Branch:** `{metadata['git_branch']}`  ")
     parts.append(f"**Created:** {format_timestamp(metadata['created_at'])}  ")
     parts.append(f"**Updated:** {format_timestamp(metadata['updated_at'])}  ")
-    resume_cmd = f"cd {shlex.quote(metadata['cwd'])} && claude -r {metadata['session_id']}"
+    resume_cmd = (f"cd {shlex.quote(metadata['cwd'])} "
+                  f"&& {providers.resume_shell('claude-code', metadata['session_id'])}")
     parts.append(f"**Resume:** `{resume_cmd}`  ")
     parts.append("\n---\n")
 
@@ -542,7 +544,7 @@ def claude_code_to_html(filepath: Path) -> str:
     created = time_tag(metadata["created_at"], "localtime")
     updated = time_tag(metadata["updated_at"], "localtime")
     resume_cmd = (f"cd {shlex.quote(metadata['cwd'])} "
-                  f"&& claude -r {metadata['session_id']}")
+                  f"&& {providers.resume_shell('claude-code', metadata['session_id'])}")
 
     metadata_parts = [f"""
             <div><strong>Session:</strong> <code>{session}</code></div>
