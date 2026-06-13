@@ -1,4 +1,6 @@
 .env*
+# Local-only PII denylist (real identifiers for fixture_pii_audit Pass B); never commit
+.fixture-denylist
 __pycache__/
 *.pyc
 .claude/*
