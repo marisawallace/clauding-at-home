@@ -39,9 +39,10 @@ def find_conversation_file_via_index(config: dict, uuid: str) -> Optional[tuple[
     """
     import sqlite3
 
-    from paths import resolve_search_index_path
+    from paths import resolve_search_index_path, migrate_legacy_index_cache
     import search_index
 
+    migrate_legacy_index_cache(config)
     db_path = resolve_search_index_path(config)
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)

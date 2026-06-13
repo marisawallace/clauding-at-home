@@ -46,13 +46,53 @@ def test_search_index_db_is_honored():
 def test_search_index_defaults_to_xdg_cache(monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", "/xdg-cache")
     result = paths.resolve_search_index_path({})
-    assert result == Path("/xdg-cache/clauding-at-home/index.db")
+    assert result == Path("/xdg-cache/scrying-at-home/index.db")
 
 
 def test_search_index_defaults_to_home_cache_without_xdg(monkeypatch):
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     result = paths.resolve_search_index_path({})
-    assert result == Path.home() / ".cache" / "clauding-at-home" / "index.db"
+    assert result == Path.home() / ".cache" / "scrying-at-home" / "index.db"
+
+
+def test_migrate_legacy_index_cache_moves_old_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    old_dir = tmp_path / "clauding-at-home"
+    old_dir.mkdir()
+    (old_dir / "index.db").write_text("data")
+
+    paths.migrate_legacy_index_cache({})
+
+    new_dir = tmp_path / "scrying-at-home"
+    assert not old_dir.exists()
+    assert (new_dir / "index.db").read_text() == "data"
+
+
+def test_migrate_legacy_index_cache_noop_when_new_dir_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    old_dir = tmp_path / "clauding-at-home"
+    old_dir.mkdir()
+    (old_dir / "index.db").write_text("old")
+    new_dir = tmp_path / "scrying-at-home"
+    new_dir.mkdir()
+
+    paths.migrate_legacy_index_cache({})
+
+    # Existing new dir is left untouched; old dir is not clobbered.
+    assert old_dir.exists()
+    assert not (new_dir / "index.db").exists()
+
+
+def test_migrate_legacy_index_cache_noop_with_custom_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    old_dir = tmp_path / "clauding-at-home"
+    old_dir.mkdir()
+    (old_dir / "index.db").write_text("old")
+
+    paths.migrate_legacy_index_cache({"SEARCH_INDEX_DB": str(tmp_path / "custom.db")})
+
+    assert old_dir.exists()
+    assert not (tmp_path / "scrying-at-home").exists()
 
 
 def test_resolve_env_path_defaults_to_script_dir_dot_env():

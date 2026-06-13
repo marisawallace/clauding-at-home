@@ -6,11 +6,13 @@ Terminal UI, hit enter to directly resume a chat. Will open your browser or `cd`
 
 **Status**: core features stable, actively in use and under development. If you're using this, please tell me!
 
+> **Renamed from `clauding-at-home` → `scrying-at-home`.** Existing clones keep working — GitHub redirects the old URL automatically. To update your remote: `git remote set-url origin git@github.com:marisawallace/scrying-at-home.git`. Your search index moves itself to the new cache location on the next run; nothing else to do.
+
 ## Features
 
 - **Multi-provider**: Claude, ChatGPT, Claude Code.
 - **Multi-account** per provider
-- **Made for cloud sync**: put `clauding-at-home/data/` in Dropbox/MEGA/etc. Search your full LLM history on all your machines.
+- **Made for cloud sync**: put `scrying-at-home/data/` in Dropbox/MEGA/etc. Search your full LLM history on all your machines.
 - **Multi-host** for Claude Code. `laptop` and `desktop` chats retain separate host paths. Sync & search everything on every device.
 - **Smart search ranking**
 - **Local view**: copy chats to Markdown or HTML, open in `$EDITOR`
@@ -24,8 +26,8 @@ Terminal UI, hit enter to directly resume a chat. Will open your browser or `cd`
 ## Setup
 
 ```
-git clone git@github.com:marisawallace/clauding-at-home.git
-cd clauding-at-home
+git clone git@github.com:marisawallace/scrying-at-home.git
+cd scrying-at-home
 python3 setup.py
 ```
 
@@ -123,7 +125,7 @@ python3 export_archive.py -s claude-code --dry-run
 Here's the conventional structure:
 
 ```
-clauding-at-home/
+scrying-at-home/
 ├── data/                           # Sync this entire folder (e.g. with MEGA)
 │   ├── llm_data/                   # Organized chat archives
 │   │   ├── claude/
@@ -170,7 +172,7 @@ For debugging, we support `--no-index` and `--verify` (which diffs searches with
 
 The index rebuilds itself if deleted, corrupted, or outdated, including automatically whenever the extraction code changes.
 
-Default location is `~/.cache/clauding-at-home/index.db`. You can change this in `.env`.
+Default location is `~/.cache/scrying-at-home/index.db`. You can change this in `.env`.
 
 
 ## Known Limitations

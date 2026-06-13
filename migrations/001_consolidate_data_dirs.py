@@ -3,13 +3,13 @@
 Migration 001: Consolidate data directories under data/
 
 Before:
-  clauding-at-home/
+  scrying-at-home/
     data/               <- chat archives (claude/, chatgpt/, ...)
     archived_exports/   <- processed export zips
     local_views/        <- generated markdown/html views
 
 After:
-  clauding-at-home/
+  scrying-at-home/
     data/
       llm_data/         <- chat archives (was: data/)
       archived_exports/ <- processed export zips (was: archived_exports/)
@@ -212,7 +212,7 @@ def main():
     # --- Find repo root ---
     repo_root = find_repo_root()
     if repo_root is None:
-        print(f"{RED}ERROR: Could not find the clauding-at-home repository root.{RESET}")
+        print(f"{RED}ERROR: Could not find the scrying-at-home repository root.{RESET}")
         print("Run this script from inside the repository directory.")
         sys.exit(1)
 

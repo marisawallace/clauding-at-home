@@ -222,7 +222,7 @@ def main():
 
     repo_root = find_repo_root()
     if repo_root is None:
-        print(f"{RED}ERROR: Could not find clauding-at-home repo root.{RESET}")
+        print(f"{RED}ERROR: Could not find scrying-at-home repo root.{RESET}")
         print(f"  Looked for {REPO_MARKER} starting from {Path(__file__).resolve().parent}.")
         sys.exit(1)
 

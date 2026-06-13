@@ -18,7 +18,7 @@ Any of these can be overridden via .env:
 The search index is per-machine derived state (rebuildable from llm_data),
 so unlike the directories above it deliberately lives OUTSIDE data/ — cloud
 sync tools corrupt SQLite files. Default: $XDG_CACHE_HOME (or ~/.cache)
-/clauding-at-home/index.db.
+/scrying-at-home/index.db.
 
 DATA_DIR was the former name of LLM_DATA_DIR. It is no longer supported: a
 DATA_DIR entry in .env now raises so a stale override can't silently point
@@ -224,15 +224,62 @@ def resolve_local_views_dir(script_dir: Path, config: dict) -> Path:
 # cloud-synced data/ tree (SQLite databases corrupt under file-level sync).
 SEARCH_INDEX_ENV_KEY = "SEARCH_INDEX_DB"
 
+# Per-machine cache dir name (under $XDG_CACHE_HOME or ~/.cache). Was
+# "clauding-at-home" before the project was renamed; migrate_legacy_index_cache
+# does a one-time move of an existing index from the old location.
+CACHE_DIR_NAME = "scrying-at-home"
+LEGACY_CACHE_DIR_NAME = "clauding-at-home"
+
+
+def _cache_base() -> Path:
+    cache_root = os.environ.get("XDG_CACHE_HOME", "").strip()
+    return Path(cache_root).expanduser() if cache_root else Path.home() / ".cache"
+
 
 def resolve_search_index_path(config: dict) -> Path:
     """Return the search index db path, honoring SEARCH_INDEX_DB from .env."""
     raw = (config.get(SEARCH_INDEX_ENV_KEY) or "").strip()
     if raw:
         return Path(raw).expanduser()
-    cache_root = os.environ.get("XDG_CACHE_HOME", "").strip()
-    base = Path(cache_root).expanduser() if cache_root else Path.home() / ".cache"
-    return base / "clauding-at-home" / "index.db"
+    return _cache_base() / CACHE_DIR_NAME / "index.db"
+
+
+def legacy_search_index_path(config: dict) -> Path | None:
+    """The pre-rename default index path, or None if a custom path is set.
+
+    Used only to migrate an existing index out of the old cache dir; returns
+    None when SEARCH_INDEX_DB is configured, since then there is nothing of
+    ours to migrate.
+    """
+    raw = (config.get(SEARCH_INDEX_ENV_KEY) or "").strip()
+    if raw:
+        return None
+    return _cache_base() / LEGACY_CACHE_DIR_NAME / "index.db"
+
+
+def migrate_legacy_index_cache(config: dict) -> None:
+    """One-time move of the index cache from the pre-rename location.
+
+    The project was renamed clauding-at-home -> scrying-at-home; the
+    per-machine search index (often a few hundred MB) lived under
+    ~/.cache/clauding-at-home. Move it to the new cache dir so existing users
+    neither reindex nor leave the old cache orphaned on disk. No-op once
+    migrated, if a custom SEARCH_INDEX_DB is set, or if the new dir already
+    exists.
+    """
+    old_path = legacy_search_index_path(config)
+    if old_path is None:
+        return
+    old_dir = old_path.parent
+    new_dir = resolve_search_index_path(config).parent
+    if new_dir == old_dir or not old_dir.is_dir() or new_dir.exists():
+        return
+    print(
+        f"Project renamed to scrying-at-home: moving search index cache "
+        f"{old_dir} -> {new_dir}"
+    )
+    new_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(old_dir), str(new_dir))
 
 
 def parse_sources_string(raw: str) -> list[tuple[str, str]]:

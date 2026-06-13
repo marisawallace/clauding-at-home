@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-setup.py: Interactive post-clone setup for clauding-at-home.
+setup.py: Interactive post-clone setup for scrying-at-home.
 
-Walks you through everything after `git clone` + `cd clauding-at-home`:
+Walks you through everything after `git clone` + `cd scrying-at-home`:
 
   1. chmod +x the three entry scripts
   2. Create .env from .env.example (if missing)
@@ -70,7 +70,7 @@ ENTRY_SCRIPTS = (
 # Fallback names to suggest when the default "cs" conflicts.
 BACKUP_ALIAS_NAMES = ("csr", "cls", "csearch", "chats", "cax")
 
-ALIAS_BLOCK_HEADER = "# clauding-at-home aliases"
+ALIAS_BLOCK_HEADER = "# scrying-at-home aliases"
 
 
 # --------------------------------------------------------------------------
@@ -664,7 +664,7 @@ def step_claude_code_migration(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Interactive post-clone setup for clauding-at-home",
+        description="Interactive post-clone setup for scrying-at-home",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -683,7 +683,7 @@ def main() -> None:
     repo_root = _REPO_ROOT
 
     print(f"\n{BOLD}{'=' * 60}{RESET}")
-    print(f"{BOLD}  clauding-at-home setup{RESET}")
+    print(f"{BOLD}  scrying-at-home setup{RESET}")
     print(f"{BOLD}{'=' * 60}{RESET}")
     print(f"\n  Repository root: {CYAN}{repo_root}{RESET}")
     if args.yes:

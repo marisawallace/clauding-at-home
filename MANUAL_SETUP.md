@@ -11,9 +11,9 @@ Then read and edit .env -- all options are explained!
 I highly recommend adding aliases to your `.bashrc` or equivalent:
 
 ```bash
-alias cs="python3 $CODE_HOME/clauding-at-home/full_text_search_chats_archive.py"
-alias cs-sync-claude="python3 $CODE_HOME/clauding-at-home/sync_local_chats_archive.py --claude"
-alias cs-sync-chatgpt="python3 $CODE_HOME/clauding-at-home/sync_local_chats_archive.py --chatgpt"
+alias cs="python3 $CODE_HOME/scrying-at-home/full_text_search_chats_archive.py"
+alias cs-sync-claude="python3 $CODE_HOME/scrying-at-home/sync_local_chats_archive.py --claude"
+alias cs-sync-chatgpt="python3 $CODE_HOME/scrying-at-home/sync_local_chats_archive.py --chatgpt"
 ```
 
 Make sure you have $EDITOR set. It'll be used to open chats in Markdown (hit v on a search result).

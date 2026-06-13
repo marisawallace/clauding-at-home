@@ -31,6 +31,7 @@ from paths import (
     resolve_local_views_dir,
     resolve_host_name,
     resolve_search_index_path,
+    migrate_legacy_index_cache,
 )
 
 
@@ -1238,6 +1239,7 @@ Examples:
     index_conn = None
     if not args.no_index:
         import search_index
+        migrate_legacy_index_cache(config)
         index_path = resolve_search_index_path(config)
         if args.reindex:
             search_index.drop_index(index_path)
