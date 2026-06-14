@@ -26,6 +26,9 @@ _TABLE = [
     ("claude-code", "CLAUDE CODE", "fg:#ff8c00 bold", "\033[38;5;208m",
      "claude-code", "Claude Code", "local-cli", True, False, "project-slug",
      ("claude", "-r")),
+    ("codex", "CODEX", "fg:#10a37f bold", "\033[38;5;43m",
+     "codex", "OpenAI Codex", "local-cli", True, False, "project-slug",
+     ("codex", "resume")),
     ("gemini", "GEMINI", "fg:ansiblue bold", "", "gemini", "gemini",
      "web", False, False, "email", ()),
 ]
@@ -63,6 +66,26 @@ def test_resume_cli_args_claude_code():
 
 def test_resume_shell_claude_code():
     assert providers.resume_shell("claude-code", "sid-1") == "claude -r sid-1"
+
+
+def test_resume_cli_args_codex():
+    assert providers.resume_cli_args("codex", "sid-1") == ["codex", "resume", "sid-1"]
+
+
+def test_resume_shell_codex():
+    assert providers.resume_shell("codex", "sid-1") == "codex resume sid-1"
+
+
+# --- is_local_cli -------------------------------------------------------------
+
+@pytest.mark.parametrize("provider", ["claude-code", "codex"])
+def test_is_local_cli_true_for_local_cli(provider):
+    assert providers.is_local_cli(provider) is True
+
+
+@pytest.mark.parametrize("provider", ["claude", "chatgpt", "gemini", "nope", ""])
+def test_is_local_cli_false_for_web_and_unknown(provider):
+    assert providers.is_local_cli(provider) is False
 
 
 @pytest.mark.parametrize("provider", ["claude", "chatgpt", "gemini", "nope"])
@@ -108,6 +131,24 @@ def test_url_claude_code_default_cwd_quoted_tilde():
     # No cwd given -> defaults to "~", which shlex.quote renders as '~'.
     assert (providers.provider_url("claude-code", "conversation", "s1")
             == "pushd '~' && claude -r s1")
+
+
+def test_url_codex_with_host():
+    assert (providers.provider_url("codex", "conversation", "s1",
+                                   cwd="/home/u/repo", host="boxA")
+            == "[boxA] pushd /home/u/repo && codex resume s1")
+
+
+def test_url_codex_without_host():
+    assert (providers.provider_url("codex", "conversation", "s1",
+                                   cwd="/home/u/repo")
+            == "pushd /home/u/repo && codex resume s1")
+
+
+def test_url_codex_quotes_spaced_cwd():
+    assert (providers.provider_url("codex", "conversation", "s1",
+                                   cwd="/home/u/my repo")
+            == "pushd '/home/u/my repo' && codex resume s1")
 
 
 def test_url_unknown_provider_sentinel():

@@ -24,6 +24,9 @@ def test_export_group_email_vs_host():
     assert ex.export_group(_result("claude", email="a@b.com")) == "a@b.com"
     cc = _result("claude-code", extra={"host": "laptop"})
     assert ex.export_group(cc) == "laptop"
+    # Bucket C guard: codex is local-cli, so it groups by host like claude-code.
+    cx = _result("codex", extra={"host": "desktop"}, email="")
+    assert ex.export_group(cx) == "desktop"
 
 
 def test_plan_path_layout_and_naming():

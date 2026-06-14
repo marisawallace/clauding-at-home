@@ -30,3 +30,11 @@ python3 migrations/002_setup_claude_code_archival.py
 ```
 
 We don't currently support manual setup for Claude Code archiving. If you'd like this, open an issue!
+
+## OpenAI Codex setup -- more on this in the README.md:
+
+```bash
+python3 migrations/004_setup_codex_archival.py
+```
+
+This adds a `Stop` hook in `~/.codex/hooks.json` calling `codex_sync.py`, sets `CODEX_SOURCES` in `.env`, and backfills existing rollouts. Codex won't run an untrusted hook: afterward, start Codex and run `/hooks` to trust it (or pass `codex exec --dangerously-bypass-hook-trust` for headless runs).

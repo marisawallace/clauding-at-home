@@ -47,9 +47,16 @@ def test_excludes_other_host():
     assert fts.filter_to_here([r], Path("/home/me/proj"), "laptop") == []
 
 
-def test_excludes_non_claude_code():
+def test_excludes_non_local_cli():
+    # web providers (claude.ai/chatgpt) have no cwd/host scoping
     r = _result(provider="claude", cwd="/home/me/proj")
     assert fts.filter_to_here([r], Path("/home/me/proj"), "laptop") == []
+
+
+def test_includes_codex():
+    # codex is local-cli, so --here scopes it like claude-code
+    r = _result(provider="codex", cwd="/home/me/proj")
+    assert fts.filter_to_here([r], Path("/home/me/proj"), "laptop") == [r]
 
 
 def test_excludes_parent_directory():
@@ -89,11 +96,11 @@ def test_hint_flags_directory_miss_when_host_matches():
     hint = _strip_ansi(fts.here_miss_hint(results, Path("/home/me/proj"), "laptop", True))
     assert "no session was recorded here" in hint
     assert "not among the result hosts" not in hint
-    assert "CLAUDE_CODE_HOST" in hint  # host_is_explicit=True
+    assert "MACHINE_NAME" in hint  # host_is_explicit=True
     assert "/home/me/proj" in hint
 
 
 def test_hint_reports_count():
     results = [_result(host="desktop"), _result(host="desktop")]
     hint = _strip_ansi(fts.here_miss_hint(results, Path("/home/me/proj"), "laptop", False))
-    assert "none of the 2 Claude Code result(s)" in hint
+    assert "none of the 2 local-CLI result(s)" in hint

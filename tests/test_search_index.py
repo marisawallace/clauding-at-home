@@ -249,6 +249,36 @@ def test_cc_meta_model_defaults_empty_and_no_preview_without_texts():
     assert meta["has_preview"] is False
 
 
+def test_codex_meta_from_parsed_metadata():
+    metadata = {
+        "session_id": "cx-1", "cwd": "/home/u/repo", "git_branch": "",
+        "created_at": "2026-06-13T00:00:00Z", "updated_at": "2026-06-13T01:00:00Z",
+        "name": "Add codex support", "model": "gpt-5.5",
+    }
+    meta = si.make_codex_item_meta(metadata, ["hello world"])
+    assert meta["uuid"] == "cx-1"
+    assert meta["item_type"] == "conversation"
+    assert meta["name"] == "Add codex support"
+    assert meta["name_raw"] == "Add codex support"
+    assert meta["model"] == "gpt-5.5"
+    assert meta["cwd"] == "/home/u/repo"
+    assert meta["git_branch"] == ""  # codex records no git info
+    assert meta["host"] == ""  # filled from FileStat by the caller
+    assert meta["preview"] == "hello world"
+    assert meta["has_preview"]
+
+
+def test_codex_meta_model_defaults_empty_and_no_preview_without_texts():
+    metadata = {
+        "session_id": "cx-1", "cwd": "/home/u/repo", "git_branch": "",
+        "created_at": "c", "updated_at": "u", "name": "n",
+    }  # no "model" key
+    meta = si.make_codex_item_meta(metadata, [])
+    assert meta["model"] == ""
+    assert meta["preview"] == ""
+    assert meta["has_preview"] is False
+
+
 # ---------------------------------------------------------------------------
 # _read_complete_lines
 # ---------------------------------------------------------------------------
@@ -661,3 +691,83 @@ def test_scan_disk_missing_dirs_are_silent(tmp_path):
     # No data dir and no cc dir on disk -> empty result, no crash.
     stats = si.scan_disk(tmp_path / "nope", [("host1", tmp_path / "alsonope")])
     assert stats == []
+
+
+# ---------------------------------------------------------------------------
+# scan_disk — Codex branch (rollout-*.jsonl at any depth, all SOURCE_CODEX,
+# no project-slug / tools-only split, email empty)
+# ---------------------------------------------------------------------------
+
+def _build_codex_corpus(tmp_path):
+    root = tmp_path / "codex"
+    day = root / "2026" / "06" / "13"
+    day.mkdir(parents=True)
+    # real rollouts at the date-tree depth
+    (day / "rollout-2026-06-13T15-48-28-aaaa.jsonl").write_text("")
+    (day / "rollout-2026-06-13T16-00-00-bbbb.jsonl").write_text("")
+    # a rollout sitting directly at the root (different depth) is still SOURCE_CODEX
+    (root / "rollout-2026-06-13T17-00-00-cccc.jsonl").write_text("")
+    # non-rollout .jsonl -> skipped (only rollout-* are transcripts)
+    (day / "history.jsonl").write_text("")
+    (day / "other.jsonl").write_text("")
+    # wrong suffix -> skipped
+    (day / "rollout-notes.txt").write_text("")
+    # symlinked rollout with a valid target -> skipped (no-follow boundary)
+    (day / "rollout-link.jsonl").symlink_to("rollout-2026-06-13T15-48-28-aaaa.jsonl")
+    return root
+
+
+def test_scan_disk_codex_classification(tmp_path):
+    root = _build_codex_corpus(tmp_path)
+    stats = si.scan_disk(tmp_path / "no-llm", [], [("host1", root)])
+
+    got = {_rec(fs, tmp_path) for fs in stats}
+    expected = {
+        (si.SOURCE_CODEX, "codex/2026/06/13/rollout-2026-06-13T15-48-28-aaaa.jsonl",
+         "", "", "", "host1"),
+        (si.SOURCE_CODEX, "codex/2026/06/13/rollout-2026-06-13T16-00-00-bbbb.jsonl",
+         "", "", "", "host1"),
+        (si.SOURCE_CODEX, "codex/rollout-2026-06-13T17-00-00-cccc.jsonl",
+         "", "", "", "host1"),
+    }
+    assert got == expected
+
+
+def test_scan_disk_codex_sources_default_none_is_noop(tmp_path):
+    # Omitting codex_sources entirely leaves behavior identical (back-compat).
+    root = _build_codex_corpus(tmp_path)
+    assert si.scan_disk(tmp_path / "no-llm", []) == []
+    assert si.scan_disk(tmp_path / "no-llm", [], None) == []
+    assert len(si.scan_disk(tmp_path / "no-llm", [], [("h", root)])) == 3
+
+
+def test_codex_indexes_end_to_end_against_fixture(tmp_path):
+    # Drop the real fixture into a codex date tree, refresh, and confirm it
+    # becomes a searchable item with the right provider/metadata + tool counts.
+    fixture = (Path(__file__).parent / "fixtures"
+               / "sample_codex_session_with_tools.jsonl")
+    day = tmp_path / "codex" / "2026" / "06" / "13"
+    day.mkdir(parents=True)
+    dest = day / "rollout-2026-06-13T20-58-34-019ec2c6.jsonl"
+    dest.write_bytes(fixture.read_bytes())
+
+    conn = si.open_index(tmp_path / "index.db")
+    assert conn is not None
+    si.refresh(conn, tmp_path / "no-llm", [],
+               lambda *a: [], lambda *a: "",
+               codex_sources=[("host1", tmp_path / "codex")])
+
+    rows = si.browse_items(conn, si.SOURCE_CODEX)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["provider"] == "codex"
+    assert row["host"] == "host1"
+    assert row["cwd"] == "/home/user/Documents/repos/scrying-at-home"
+    assert row["model"] == "gpt-5.4-mini"  # this fixture's turn_context model
+    assert "codex" in row["name"].lower()
+
+    # tool counts from the same rollout (function_call + custom_tool_call)
+    counts = si.tool_counts(conn)
+    assert counts["exec_command"] == 40
+    assert counts["apply_patch"] == 14
+    conn.close()

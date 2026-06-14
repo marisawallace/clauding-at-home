@@ -183,8 +183,9 @@ def test_search_here_no_query_newest_first(isolated_workspace, run_cli, tmp_path
     env_path = isolated_workspace / ".env"
     env_path.write_text(
         f"CLAUDE_CODE_SOURCES=testhost={cc_dir}\n"
-        f"CLAUDE_CODE_HOST=testhost\n"
+        f"MACHINE_NAME=testhost\n"
         f"LLM_DATA_DIR={isolated_workspace / 'data' / 'llm_data'}\n"
+        f"SEARCH_INDEX_DB={isolated_workspace / 'search_index.db'}\n"
     )
 
     result = run_cli(

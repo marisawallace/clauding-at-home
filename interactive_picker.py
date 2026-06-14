@@ -103,7 +103,7 @@ def _render_result(result, query: str, exact: bool, selected: bool, current_host
 
     from full_text_search_chats_archive import prettify_model
     model_label = prettify_model(result.model)
-    if result.provider == "claude-code":
+    if providers.is_local_cli(result.provider):
         extra = result.extra or {}
         host = extra.get("host", "")
         meta = [("fg:#888888", f"Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}")]
@@ -118,7 +118,7 @@ def _render_result(result, query: str, exact: bool, selected: bool, current_host
         model_segment = f"{model_label} | " if model_label else ""
         line([("fg:#888888", f"Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]} | {model_segment}{result.email}")])
 
-    if result.provider == "claude-code":
+    if providers.is_local_cli(result.provider):
         extra = result.extra or {}
         cwd = os.path.expanduser(extra.get("cwd", "~"))
         line([("fg:#888888", cwd)])
@@ -274,10 +274,11 @@ class ResultPicker:
 
 def act_on_choice(result, current_host: str, demo: bool = False) -> int:
     """Take the action for the chosen result. Returns process exit code (0 on success)."""
-    if result.provider == "claude-code":
+    if providers.is_local_cli(result.provider):
         extra = result.extra or {}
         cwd = os.path.expanduser(extra.get("cwd", "~"))
         host = extra.get("host", "")
+        argv = providers.resume_cli_args(result.provider, result.uuid)
 
         if not demo and current_host and host and host != current_host:
             # Different host — can't resume here. Print the command for the user.
@@ -290,15 +291,15 @@ def act_on_choice(result, current_host: str, demo: bool = False) -> int:
             print(f"Resume command: {providers.resume_shell(result.provider, result.uuid)}")
             return 1
 
-        # Run claude as a child in `cwd` rather than chdir-ing this process.
-        # The parent shell's working directory is unaffected, so when `claude`
-        # exits the user is back where they ran the search — same end-state as
-        # `pushd ... && claude -r ... && popd`, without needing the shell at all.
+        # Run the resume CLI (claude/codex) as a child in `cwd` rather than
+        # chdir-ing this process. The parent shell's working directory is
+        # unaffected, so when the CLI exits the user is back where they ran the
+        # search — same end-state as `pushd ... && <cli> ... && popd`.
         try:
-            proc = subprocess.run(providers.resume_cli_args(result.provider, result.uuid), cwd=cwd)
+            proc = subprocess.run(argv, cwd=cwd)
             return proc.returncode
         except FileNotFoundError:
-            print("Error: `claude` CLI not found on PATH.", file=sys.stderr)
+            print(f"Error: `{argv[0]}` CLI not found on PATH.", file=sys.stderr)
             return 1
         except KeyboardInterrupt:
             return 130

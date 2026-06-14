@@ -112,6 +112,19 @@ _PROVIDERS: dict[str, Provider] = {
         account_slot="project-slug",
         resume_argv=("claude", "-r"),
     ),
+    "codex": Provider(
+        id="codex",
+        badge_label="CODEX",
+        tui_style="fg:#10a37f bold",       # OpenAI teal-green
+        ansi_color="\033[38;5;43m",        # 256-color teal: distinct from CC orange
+        analytics_label="codex",
+        source_label="OpenAI Codex",
+        kind="local-cli",                  # cwd/host, resumed via `codex resume`
+        html_supported=True,
+        browser_openable=False,
+        account_slot="project-slug",       # no account dir; cwd is the identity
+        resume_argv=("codex", "resume"),
+    ),
     # Known but unsupported: we surface Gemini results other tooling may have
     # produced (labels/colour), but there is no ingest and no resumable thread
     # URL, so html_supported is False and there is no resume_argv. See
@@ -148,6 +161,19 @@ def all_providers() -> dict[str, Provider]:
     (e.g. {id: p.analytics_label}) instead of hand-maintaining a parallel dict.
     """
     return dict(_PROVIDERS)
+
+
+def is_local_cli(provider: str) -> bool:
+    """True if `provider` is a local-CLI source (claude-code, codex): it carries
+    a cwd/host and is resumed via a CLI rather than opened in a browser.
+
+    This is the registry-driven replacement for the `provider == "claude-code"`
+    data-routing branches the refactor deferred (analytics host/cwd breakdowns,
+    the viewer's renderer dispatch, export grouping, the picker's resume gate).
+    Unknown providers are not local-cli.
+    """
+    p = _PROVIDERS.get(provider)
+    return p is not None and p.kind == "local-cli"
 
 
 def resume_cli_args(provider: str, session_id: str) -> list[str]:
@@ -187,7 +213,9 @@ def provider_url(provider: str, item_type: str, uuid: str,
         return f"https://claude.ai/project/{uuid}"
     if provider == "chatgpt":
         return f"https://chatgpt.com/c/{uuid}"
-    if provider == "claude-code":
+    if is_local_cli(provider):
+        # Both local-cli providers (claude-code, codex) resume the same way:
+        # pushd into the session cwd, then the registry-driven resume command.
         prefix = f"[{host}] " if host else ""
         return f"{prefix}pushd {shlex.quote(cwd)} && {resume_shell(provider, uuid)}"
     return f"Unknown provider: {provider}"

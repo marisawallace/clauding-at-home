@@ -8,10 +8,14 @@ archive that the search/view tools index.
 
 What it does:
   1. Prompts for a human-readable name for this machine (defaults to a
-     normalized socket.gethostname()), writes it as CLAUDE_CODE_HOST in .env
+     normalized socket.gethostname()), writes it as MACHINE_NAME in .env
   2. Adds Stop + SessionEnd hooks to ~/.claude/settings.json (with backup)
   3. Upserts CLAUDE_CODE_SOURCES=<host>=<archive-path> in .env
   4. Creates data/llm_data/claude-code/<host>/
+
+MACHINE_NAME is provider-neutral (the machine identity is shared with Codex). A
+pre-rename CLAUDE_CODE_HOST line is read as a fallback and rewritten to
+MACHINE_NAME in place.
 
 Usage:
   python3 migrations/002_setup_claude_code_archival.py
@@ -19,7 +23,7 @@ Usage:
 
 To uninstall: delete the Stop and SessionEnd entries pointing at
 claude_code_hook.py in ~/.claude/settings.json, and unset
-CLAUDE_CODE_HOST and CLAUDE_CODE_SOURCES in .env.
+MACHINE_NAME and CLAUDE_CODE_SOURCES in .env.
 """
 
 from __future__ import annotations
@@ -51,10 +55,13 @@ sys.path.insert(0, str(_REPO_ROOT))
 from paths import (  # noqa: E402
     CLAUDE_CODE_HOST_ENV_KEY,
     CLAUDE_CODE_SOURCES_ENV_KEY,
+    MACHINE_NAME_ENV_KEY,
     active_env_values,
+    explicit_host_name,
     load_env_file,
     normalize_hostname,
     parse_sources_string,
+    remove_env_key,
     resolve_data_dir,
     resolve_invocation,
     set_env_value,
@@ -123,14 +130,17 @@ def merged_source_pairs(env_text: str) -> dict[str, str]:
 
 
 def planned_env_text(env_text: str, hostname: str, sources_value: str) -> str:
-    """Pure: the .env text after setting CLAUDE_CODE_HOST and CLAUDE_CODE_SOURCES.
+    """Pure: the .env text after setting MACHINE_NAME and CLAUDE_CODE_SOURCES.
 
-    Each key collapses to a single active line (set_env_value), so comparing
-    the result against the current text answers both "does .env need a
-    write?" and "are there stale duplicate/commented lines to normalize?"
-    with one check.
+    Writes the machine name under the canonical MACHINE_NAME key and retires any
+    legacy CLAUDE_CODE_HOST line (resolve_host_name still reads it as a fallback,
+    but we don't leave two keys where one silently shadows the other). Each key
+    collapses to a single active line (set_env_value), so comparing the result
+    against the current text answers both "does .env need a write?" and "are
+    there stale duplicate/commented lines to normalize?" with one check.
     """
-    text = set_env_value(env_text, CLAUDE_CODE_HOST_ENV_KEY, hostname)
+    text = set_env_value(env_text, MACHINE_NAME_ENV_KEY, hostname)
+    text = remove_env_key(text, CLAUDE_CODE_HOST_ENV_KEY)
     return set_env_value(text, CLAUDE_CODE_SOURCES_ENV_KEY, sources_value)
 
 
@@ -230,14 +240,17 @@ def main():
     env_text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     existing_env = load_env_file(env_path)
 
-    # Resolve the human-readable host name. Prefer an existing CLAUDE_CODE_HOST
-    # entry so re-running the migration is idempotent. Otherwise prompt the
-    # user, defaulting to a normalized gethostname() (lowercased, .local
-    # stripped). The override exists because macOS hostnames flip around with
-    # network conditions; a hand-picked name is stable and human-readable.
+    # Resolve the human-readable host name. Prefer an existing MACHINE_NAME (or
+    # legacy CLAUDE_CODE_HOST) entry so re-running the migration is idempotent.
+    # Otherwise prompt the user, defaulting to a normalized gethostname()
+    # (lowercased, .local stripped). The override exists because macOS hostnames
+    # flip around with network conditions; a hand-picked name is stable and
+    # human-readable.
     raw_host = socket.gethostname()
     default_host = normalize_hostname(raw_host) or raw_host
-    existing_host = existing_env.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip()
+    canonical_host = existing_env.get(MACHINE_NAME_ENV_KEY, "").strip()
+    legacy_host = existing_env.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip()
+    existing_host = explicit_host_name(existing_env)
     if existing_host:
         hostname = existing_host
     elif args.yes:
@@ -341,17 +354,23 @@ def main():
         env_action = "create"
         print(f"  {GREEN}+{RESET} .env CLAUDE_CODE_SOURCES={hostname}={archive_dir}")
 
-    if existing_host == hostname:
+    if canonical_host == hostname and not legacy_host:
         host_action = "unchanged"
-        print(f"  {DIM}.env CLAUDE_CODE_HOST already set to {hostname} — skip{RESET}")
-    elif existing_host:
+        print(f"  {DIM}.env {MACHINE_NAME_ENV_KEY} already set to {hostname} — skip{RESET}")
+    elif legacy_host and not canonical_host:
+        host_action = "migrate"
+        print(
+            f"  {YELLOW}~{RESET} .env: rename {CLAUDE_CODE_HOST_ENV_KEY} → "
+            f"{MACHINE_NAME_ENV_KEY}={hostname}"
+        )
+    elif canonical_host:
         host_action = "update"
         print(
-            f"  {YELLOW}~{RESET} .env CLAUDE_CODE_HOST: {existing_host} → {hostname}"
+            f"  {YELLOW}~{RESET} .env {MACHINE_NAME_ENV_KEY}: {canonical_host} → {hostname}"
         )
     else:
         host_action = "add"
-        print(f"  {GREEN}+{RESET} .env CLAUDE_CODE_HOST={hostname}")
+        print(f"  {GREEN}+{RESET} .env {MACHINE_NAME_ENV_KEY}={hostname}")
 
     # The authoritative "does .env need a write?" check compares the planned
     # rewritten text against what's on disk, not just the parsed values — so
@@ -414,7 +433,7 @@ def main():
         env_path.write_text(new_env_text, encoding="utf-8")
         print(
             f"  {GREEN}✓{RESET} Updated .env "
-            f"(CLAUDE_CODE_HOST: {host_action}, CLAUDE_CODE_SOURCES: {env_action})"
+            f"({MACHINE_NAME_ENV_KEY}: {host_action}, {CLAUDE_CODE_SOURCES_ENV_KEY}: {env_action})"
         )
 
     # 3. archive dir
@@ -497,7 +516,7 @@ def main():
 
   {BOLD}To uninstall:{RESET}
     Delete the Stop and SessionEnd entries pointing at {REPO_MARKER}
-    in {SETTINGS_PATH}, and unset CLAUDE_CODE_HOST and
+    in {SETTINGS_PATH}, and unset MACHINE_NAME and
     CLAUDE_CODE_SOURCES in .env.
 """)
 

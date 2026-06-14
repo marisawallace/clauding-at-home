@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import providers
-from paths import resolve_data_dir, resolve_local_views_dir, parse_claude_code_sources, resolve_env_path, load_env_file, open_in_editor
+from paths import resolve_data_dir, resolve_local_views_dir, parse_claude_code_sources, parse_codex_sources, resolve_env_path, load_env_file, open_in_editor
 
 CLAUDE_CHAT_URL_PREFIX = "https://claude.ai/chat/"
 
@@ -593,6 +593,30 @@ def claude_code_to_html(filepath: Path) -> str:
         providers.resume_shell("claude-code", metadata["session_id"]))
 
 
+def codex_to_markdown(filepath: Path) -> str:
+    """Parse an OpenAI Codex rollout JSONL session and render it to Markdown."""
+    import codex_parser as cxp
+
+    lines = cxp.parse_jsonl(filepath)
+    metadata = cxp.extract_session_metadata(lines)
+    turns = cxp.extract_conversation_turns(lines)
+    return transcript_to_markdown(
+        metadata, turns,
+        providers.resume_shell("codex", metadata["session_id"]))
+
+
+def codex_to_html(filepath: Path) -> str:
+    """Parse an OpenAI Codex rollout JSONL session and render it to HTML."""
+    import codex_parser as cxp
+
+    lines = cxp.parse_jsonl(filepath)
+    metadata = cxp.extract_session_metadata(lines)
+    turns = cxp.extract_conversation_turns(lines)
+    return transcript_to_html(
+        metadata, turns, _SOURCE_LABELS["codex"],
+        providers.resume_shell("codex", metadata["session_id"]))
+
+
 def markdown_body(content: str) -> str:
     """Markdown after the header — everything past the first '\n---\n' separator.
 
@@ -622,13 +646,22 @@ def classify_refresh(existing: str, fresh: str) -> str:
     return "diverged"
 
 
+# Per-provider transcript renderers for the local-CLI sources, as
+# (markdown_fn, html_fn). A new local-cli provider plugs in with one row; web
+# providers (claude/chatgpt) fall through to the JSON conversation/project path.
+_TRANSCRIPT_RENDERERS = {
+    "claude-code": (claude_code_to_markdown, claude_code_to_html),
+    "codex": (codex_to_markdown, codex_to_html),
+}
+
+
 def render_conversation(provider: str, conv_file: Path, fmt: str,
                         item_type: str = "conversation") -> str:
     """Render a conversation (or claude.ai project) file to markdown or HTML."""
-    if provider == "claude-code":
-        if fmt == "html":
-            return claude_code_to_html(conv_file)
-        return claude_code_to_markdown(conv_file)
+    renderers = _TRANSCRIPT_RENDERERS.get(provider)
+    if renderers is not None:
+        md_fn, html_fn = renderers
+        return html_fn(conv_file) if fmt == "html" else md_fn(conv_file)
     with open(conv_file, "r", encoding="utf-8") as f:
         data = json.load(f)
     if item_type == "project":
@@ -651,7 +684,7 @@ def get_output_path(local_views_dir: Path, uuid: str, provider: str, format: str
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="View a conversation as Markdown or HTML (Claude, ChatGPT, Claude Code).",
+        description="View a conversation as Markdown or HTML (Claude, ChatGPT, Claude Code, OpenAI Codex).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -663,7 +696,7 @@ Examples:
 
     parser.add_argument(
         "uuid",
-        help="UUID of the conversation or Claude Code session ID to view"
+        help="UUID of the conversation or Claude Code / Codex session ID to view"
     )
 
     parser.add_argument(
@@ -718,6 +751,15 @@ Examples:
             cc_file = ccp.find_session_file(cc_data_dir, args.uuid)
             if cc_file:
                 result = (cc_file, "claude-code")
+                break
+
+    if not result:
+        # Try OpenAI Codex across each configured host source
+        import codex_parser as cxp
+        for _host, codex_data_dir in parse_codex_sources(config):
+            codex_file = cxp.find_session_file(codex_data_dir, args.uuid)
+            if codex_file:
+                result = (codex_file, "codex")
                 break
 
     if not result:

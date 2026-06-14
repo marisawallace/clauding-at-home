@@ -2,6 +2,7 @@
 Pytest configuration and shared fixtures for integration tests.
 """
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -286,23 +287,43 @@ SEARCH_INDEX_DB={workspace / "search_index.db"}
 
 
 @pytest.fixture
-def run_cli(repo_root):
+def run_cli(repo_root, tmp_path):
     """Run an entry-point script as a subprocess, pinned to a test config.
 
     ``config`` is required (keyword-only) and is passed as ``--config`` so the
     script never falls back to the real ``repo_root/.env``. A forgotten config
     raises ``TypeError`` immediately rather than silently reading the live file.
 
+    The subprocess runs under a throwaway ``$HOME``/``$XDG_CACHE_HOME``/
+    ``$CODEX_HOME`` so that any path the app resolves from the environment rather
+    than from ``--config`` — the search index default (``paths._cache_base``),
+    the legacy-cache migration, ``~/.codex``, the dotfile alias scan — lands
+    inside the sandbox. Without this a test that forgets ``SEARCH_INDEX_DB`` in
+    its ``.env`` would refresh (and prune) the developer's real
+    ``~/.cache/scrying-at-home/index.db``. A caller-supplied ``env`` is merged
+    on top, so an explicit override still wins.
+
     Extra keyword args (``cwd``, ``env``, ...) pass through to
     ``subprocess.run``; ``capture_output``/``text`` default to True.
     """
+    sandbox_home = tmp_path / "home"
+    sandbox_cache = sandbox_home / ".cache"
+    sandbox_cache.mkdir(parents=True, exist_ok=True)
+
     def _run(script: str, *args: str, config, **kwargs):
         kwargs.setdefault("capture_output", True)
         kwargs.setdefault("text", True)
+        env = {
+            **os.environ,
+            "HOME": str(sandbox_home),
+            "XDG_CACHE_HOME": str(sandbox_cache),
+            "CODEX_HOME": str(sandbox_home / ".codex"),
+            **kwargs.pop("env", {}),
+        }
         return subprocess.run(
             [sys.executable, str(repo_root / script),
              "--config", str(config), *args],
-            **kwargs,
+            env=env, **kwargs,
         )
     return _run
 

@@ -56,8 +56,8 @@ ENV_FILE = REPO_ROOT / ".env"
 def resolve_archive_dir() -> Path:
     """Return the archive path for this machine from CLAUDE_CODE_SOURCES.
 
-    The host key is read from CLAUDE_CODE_HOST if set, else falls back to a
-    normalized socket.gethostname().
+    The host key is read from MACHINE_NAME (or the legacy CLAUDE_CODE_HOST) if
+    set, else falls back to a normalized socket.gethostname().
     """
     config = load_env_file(ENV_FILE)
     sources = parse_claude_code_sources(config)

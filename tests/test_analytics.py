@@ -73,6 +73,17 @@ def test_host_counts_only_claude_code():
     assert counts == {"laptop": 2, "desktop": 1}
 
 
+def test_host_counts_includes_codex():
+    # Bucket C guard: codex is local-cli, so its host must be counted alongside
+    # claude-code (a `provider == "claude-code"` literal here would drop it).
+    results = [
+        _result("codex", extra={"host": "laptop"}),
+        _result("claude-code", extra={"host": "laptop"}),
+        _result("chatgpt", extra={"host": "ignored"}),  # web: no host
+    ]
+    assert analytics.host_counts(results) == {"laptop": 2}
+
+
 # --- timeline / histograms --------------------------------------------------
 
 def test_monthly_counts_fills_gaps():
@@ -108,6 +119,18 @@ def test_top_directories_abbreviates_home_and_ranks():
     assert ("/etc/somewhere", 1) in dirs
 
 
+def test_top_directories_includes_codex():
+    # Bucket C guard: codex session cwds must appear in the directory breakdown.
+    results = [
+        _result("codex", extra={"cwd": "/work/repo"}),
+        _result("claude-code", extra={"cwd": "/work/repo"}),
+        _result("claude", extra={"cwd": "/ignored"}),  # web: no cwd grouping
+    ]
+    dirs = analytics.top_directories(results)
+    assert ("/work/repo", 2) in dirs
+    assert all(cwd != "/ignored" for cwd, _ in dirs)
+
+
 def test_busiest_day():
     results = [
         _result(created_at="2026-05-01T01:00:00Z"),
@@ -135,7 +158,7 @@ def test_format_report_tool_section_only_when_counts_given():
     results = [_result("claude-code", extra={"host": "laptop", "cwd": "/x"})]
     assert "tool usage" not in analytics.format_report(results)
     with_tools = analytics.format_report(results, tool_counts=Counter({"Bash": 3}))
-    assert "Claude Code tool usage" in with_tools
+    assert "Local-CLI tool usage" in with_tools
     assert "Bash" in with_tools
 
 
@@ -147,6 +170,6 @@ def test_format_report_includes_sections():
     report = analytics.format_report(results)
     assert "LLM Archive Analytics" in report
     assert "By provider" in report
-    assert "Claude Code by host" in report
+    assert "Local-CLI sessions by host" in report
     assert "Activity by month" in report
     assert "Busiest day" in report

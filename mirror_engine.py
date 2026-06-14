@@ -129,15 +129,21 @@ def sync_transcript(transcript_path: Path, archive_path: Path,
 
 def sync_directory(scan_root: Path, archive_dir: Path, event: str, *,
                    anchor: str, validate_root: Path,
-                   log_anomaly: Callable[[str], None]) -> None:
-    """Sync every *.jsonl under scan_root into archive_dir.
+                   log_anomaly: Callable[[str], None],
+                   glob: str = "*.jsonl") -> None:
+    """Sync every file matching `glob` under scan_root into archive_dir.
+
+    `glob` defaults to all '*.jsonl' (Claude Code: every file under a project
+    dir is a transcript). An adapter narrows it when its tree mixes transcripts
+    with other .jsonl files — Codex passes 'rollout-*.jsonl' so the archive
+    holds exactly what the indexer treats as a transcript and nothing else.
 
     Files that fail validation or path mapping are skipped (with a note) so one
     stray file never aborts the sweep.
     """
     total_files = 0
     total_lines = 0
-    for jsonl in scan_root.rglob("*.jsonl"):
+    for jsonl in scan_root.rglob(glob):
         try:
             validate_source_path(jsonl, validate_root)
             archive_path = get_archive_path(jsonl, archive_dir, anchor=anchor)

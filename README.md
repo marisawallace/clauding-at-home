@@ -10,10 +10,10 @@ Terminal UI, hit enter to directly resume a chat. Will open your browser or `cd`
 
 ## Features
 
-- **Multi-provider**: Claude, ChatGPT, Claude Code.
+- **Multi-provider**: Claude, ChatGPT, Claude Code, OpenAI Codex.
 - **Multi-account** per provider
 - **Made for cloud sync**: put `scrying-at-home/data/` in Dropbox/MEGA/etc. Search your full LLM history on all your machines.
-- **Multi-host** for Claude Code. `laptop` and `desktop` chats retain separate host paths. Sync & search everything on every device.
+- **Multi-host** for Claude Code and Codex. `laptop` and `desktop` chats retain separate host paths. Sync & search everything on every device.
 - **Smart search ranking**
 - **Local view**: copy chats to Markdown or HTML, open in `$EDITOR`
 - **Bulk export**: `export_archive.py` dumps your whole archive to a dated tree of Markdown files
@@ -81,12 +81,29 @@ Setup is one command:
 python3 migrations/002_setup_claude_code_archival.py
 ```
 
-Which adds hooks in your `~/.claude/settings.json` to call `claude_code_hook.py`. Sessions are archived based on `CLAUDE_CODE_HOST` and `CLAUDE_CODE_SOURCES`, which must be set in `.env`. The migration sets these for you.
+Which adds hooks in your `~/.claude/settings.json` to call `claude_code_hook.py`. Sessions are archived based on `MACHINE_NAME` (provider-neutral; the legacy name `CLAUDE_CODE_HOST` is still read as a fallback) and `CLAUDE_CODE_SOURCES`, which must be set in `.env`. The migration sets these for you.
 
 
 **Assumption**: Claude Code JSONL transcripts are immutable append-only logs.
 
 The line-count-based sync depends on this. If this changes, archives could diverge from `~/.claude/projects/` — the hook writes to `claude_code_anomalies.log` as a canary.
+
+
+#### OpenAI Codex
+
+Codex writes a JSONL "rollout" transcript per session under `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` (default `~/.codex`). Also local-only, like Claude Code.
+
+`codex_sync.py` archives those rollouts for search, sync, and markdown editing. Setup is one command:
+
+```
+python3 migrations/004_setup_codex_archival.py
+```
+
+Which adds a `Stop` hook in `~/.codex/hooks.json` to call `codex_sync.py`, sets `CODEX_SOURCES` in `.env`, and backfills existing history. Codex won't run an untrusted hook, so after the migration, start Codex and run `/hooks` to trust it (or use `codex exec --dangerously-bypass-hook-trust` for headless automation).
+
+Unlike Claude Code, the Codex `Stop` payload carries no transcript path, so the hook sweeps the whole `sessions/` tree each turn — idempotent and cheap (it line-count compares the archive and writes only the new tail). Same append-only assumption; truncation is reported to `codex_anomalies.log`.
+
+Search/view just like any other provider: `cs -s codex "query"`, `cs --here` (now spans Claude Code *and* Codex sessions from the current directory).
 
 ## Usage (if you set up based aliases)
 
@@ -140,10 +157,14 @@ scrying-at-home/
 │   │   │       ├── conversations/
 │   │   │       │   └── YYYY-MM-DD_Title.json
 │   │   │       └── user.json
-│   │   └── claude-code/            # Claude Code session archives
+│   │   ├── claude-code/            # Claude Code session archives
+│   │   │   └── <hostname>/         # one subdir per machine
+│   │   │       └── <project-slug>/
+│   │   │           └── <session-id>.jsonl
+│   │   └── codex/                  # OpenAI Codex rollout archives
 │   │       └── <hostname>/         # one subdir per machine
-│   │           └── <project-slug>/
-│   │               └── <session-id>.jsonl
+│   │           └── YYYY/MM/DD/
+│   │               └── rollout-*.jsonl
 │   ├── archived_exports/           # Processed export zip files
 │   │   ├── claude/
 │   │   │   └── data-YYYY-MM-DD-*.zip
@@ -158,9 +179,11 @@ scrying-at-home/
 │           └── {uuid}.html
 ├── migrations/                     # Idempotent!
 │   ├── 001_consolidate_data_dirs.py
-│   └── 002_setup_claude_code_archival.py
+│   ├── 002_setup_claude_code_archival.py
+│   └── 004_setup_codex_archival.py
 ├── sync_local_chats_archive.py     # Import and sync exports
 ├── claude_code_hook.py             # Claude Code Stop/SessionEnd hook
+├── codex_sync.py                   # OpenAI Codex Stop hook (sessions sweep)
 └── full_text_search_chats_archive.py  # Search conversations
 ```
 

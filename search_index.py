@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Callable, Optional, Protocol
 
 import claude_code_parser as ccp
+import codex_parser as cxp
 
 SCHEMA_VERSION = 6
 RECONCILE_BATCH = 200
@@ -56,6 +57,7 @@ PROGRESS_BAR_WIDTH = 30
 SCHEMA_SOURCE_FILES = (
     "search_index.py",
     "claude_code_parser.py",
+    "codex_parser.py",
     "full_text_search_chats_archive.py",
 )
 
@@ -89,6 +91,10 @@ SOURCE_CC = "claude-code"
 # tool leaderboard only — no fts/items rows, so they can never match a
 # search, exactly like the scan path.
 SOURCE_CC_TOOLS = "claude-code-tools-only"
+# OpenAI Codex rollout transcripts (rollout-*.jsonl). Unlike Claude Code there
+# is no tools-only variant: one rollout file per session holds both the
+# searchable text and the tool calls, so every Codex file is searchable.
+SOURCE_CODEX = "codex"
 
 SCHEMA_SQL = """
 CREATE TABLE files (
@@ -111,7 +117,7 @@ CREATE TABLE items (
     file_id     INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
     uuid        TEXT NOT NULL,
     item_type   TEXT NOT NULL,              -- 'conversation' | 'project'
-    provider    TEXT NOT NULL,              -- 'claude' | 'chatgpt' | 'claude-code'
+    provider    TEXT NOT NULL,              -- 'claude' | 'chatgpt' | 'claude-code' | 'codex'
     name        TEXT NOT NULL,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
@@ -170,14 +176,14 @@ class FileStat:
     """One archive file as seen on disk, with the walk-derived context
     needed to index it."""
     path: str
-    source: str          # SOURCE_LLM | SOURCE_CC
+    source: str          # SOURCE_LLM | SOURCE_CC | SOURCE_CC_TOOLS | SOURCE_CODEX
     mtime_ns: int
     ctime_ns: int
     size: int
     provider: str = ""   # llm: 'claude' | 'chatgpt'
-    email: str = ""      # llm: account email; cc: project slug
+    email: str = ""      # llm: account email; cc: project slug; codex: ""
     item_type: str = ""  # llm: 'conversation' | 'project'
-    host: str = ""       # cc only
+    host: str = ""       # cc / codex only
 
 
 @dataclass(frozen=True)
@@ -305,6 +311,28 @@ def make_cc_item_meta(metadata: dict, texts: list[str]) -> dict:
     }
 
 
+def make_codex_item_meta(metadata: dict, texts: list[str]) -> dict:
+    """Item metadata for an OpenAI Codex rollout from its parsed
+    extract_session_metadata() dict. Mirrors make_cc_item_meta: uuid is the
+    session_id, host is filled from FileStat by the caller, and git_branch is
+    always '' (Codex records no git info)."""
+    preview, has_preview = preview_from_texts(texts)
+    return {
+        "uuid": metadata["session_id"],
+        "item_type": "conversation",
+        "name": metadata["name"],
+        "name_raw": metadata["name"],  # codex names are always non-empty: name == raw
+        "created_at": metadata["created_at"],
+        "updated_at": metadata["updated_at"],
+        "model": metadata.get("model", ""),
+        "host": "",  # filled from FileStat by the caller
+        "cwd": metadata["cwd"],
+        "git_branch": metadata["git_branch"],  # always "" for codex
+        "preview": preview,
+        "has_preview": has_preview,
+    }
+
+
 class TranscriptParser(Protocol):
     """The interface a local-CLI transcript parser exposes (claude_code_parser
     today; codex_parser next). A plain module satisfies it by defining these as
@@ -332,11 +360,14 @@ class _TranscriptIndexer:
 # Source -> how to index it. Claude Code's searchable transcripts (SOURCE_CC)
 # and tool-counts-only files (SOURCE_CC_TOOLS) share one indexer; a tools-only
 # file just skips the fts/items rows (its fs.source != indexer.searchable).
-# Adding Codex is: a codex_parser module + make_codex_item_meta + entries here.
+# Codex has no tools-only variant — its single rollout per session is always
+# searchable, so SOURCE_CODEX maps straight to its own indexer.
 _CC_INDEXER = _TranscriptIndexer("claude-code", ccp, make_cc_item_meta, SOURCE_CC)
+_CODEX_INDEXER = _TranscriptIndexer("codex", cxp, make_codex_item_meta, SOURCE_CODEX)
 _TRANSCRIPT_INDEXERS: dict = {
     SOURCE_CC: _CC_INDEXER,
     SOURCE_CC_TOOLS: _CC_INDEXER,
+    SOURCE_CODEX: _CODEX_INDEXER,
 }
 # Sources that follow the append-only transcript re-index rule in diff_index.
 _TRANSCRIPT_SOURCES = frozenset(_TRANSCRIPT_INDEXERS)
@@ -523,17 +554,29 @@ def _scan_suffix(dir_path, suffix: str):
             yield entry.path, st
 
 
-def _walk_cc_jsonl(root, depth: int = 1):
-    """Yield (path_str, os.stat_result, depth) for every regular-file '*.jsonl'
-    at or below root, without following symlinks: symlinked directories are not
-    descended into and symlinked '*.jsonl' entries are skipped entirely. depth
-    counts levels below the source root, so a direct child of root is depth 1.
+def _is_jsonl(name: str) -> bool:
+    return name.endswith(".jsonl")
+
+
+def _is_codex_rollout(name: str) -> bool:
+    """A Codex rollout transcript: rollout-<ISO-ts>-<uuid>.jsonl. The prefix
+    distinguishes a session rollout from any other .jsonl Codex may drop in the
+    tree, so only real transcripts are indexed."""
+    return name.startswith("rollout-") and name.endswith(".jsonl")
+
+
+def _walk_jsonl(root, name_matches: Callable[[str], bool] = _is_jsonl, depth: int = 1):
+    """Yield (path_str, os.stat_result, depth) for every regular file at or below
+    root whose basename satisfies name_matches (default: any '*.jsonl'), without
+    following symlinks: symlinked directories are not descended into and symlinked
+    matching entries are skipped entirely. depth counts levels below the source
+    root, so a direct child of root is depth 1.
 
     Not following symlinks is a deliberate security boundary: only files that
-    physically live inside a configured Claude Code source get stat'd, indexed,
-    and later read for search. A symlink planted in the tree cannot pull
-    out-of-tree content into the index. It also removes the duplicate-row /
-    double-count that a symlinked project dir used to produce."""
+    physically live inside a configured source get stat'd, indexed, and later
+    read for search. A symlink planted in the tree cannot pull out-of-tree
+    content into the index. It also removes the duplicate-row / double-count that
+    a symlinked project dir used to produce."""
     try:
         entries = os.scandir(root)
     except OSError:
@@ -543,8 +586,8 @@ def _walk_cc_jsonl(root, depth: int = 1):
             if entry.is_symlink():
                 continue
             if entry.is_dir(follow_symlinks=False):
-                yield from _walk_cc_jsonl(entry.path, depth + 1)
-            elif entry.name.endswith(".jsonl"):
+                yield from _walk_jsonl(entry.path, name_matches, depth + 1)
+            elif name_matches(entry.name):
                 try:
                     st = entry.stat()
                 except OSError:
@@ -552,13 +595,17 @@ def _walk_cc_jsonl(root, depth: int = 1):
                 yield entry.path, st, depth
 
 
-def scan_disk(data_dir: Path, cc_sources: list[tuple[str, Path]]) -> list[FileStat]:
+def scan_disk(data_dir: Path, cc_sources: list[tuple[str, Path]],
+              codex_sources: list[tuple[str, Path]] | None = None) -> list[FileStat]:
     """Stat every archive file, walking directories exactly like
     search_archive() and search_claude_code_archive() do.
 
     Uses os.scandir rather than pathlib/glob for speed while preserving the
     exact classification of the old implementation; see the characterization
-    tests in tests/test_search_index.py."""
+    tests in tests/test_search_index.py.
+
+    codex_sources defaults to none so existing callers are undisturbed; when
+    given, each (host, root) is walked for rollout-*.jsonl transcripts."""
     stats: list[FileStat] = []
 
     for provider in ["claude", "chatgpt"]:
@@ -587,7 +634,7 @@ def scan_disk(data_dir: Path, cc_sources: list[tuple[str, Path]]) -> list[FileSt
         # is a searchable transcript (SOURCE_CC, keyed by that directory's
         # name); every other *.jsonl — root level or deeper, e.g. subagents —
         # feeds the tool leaderboard only (SOURCE_CC_TOOLS).
-        for path, st, depth in _walk_cc_jsonl(cc_data_dir):
+        for path, st, depth in _walk_jsonl(cc_data_dir):
             if depth == 2:
                 stats.append(FileStat(
                     path=path, source=SOURCE_CC,
@@ -599,6 +646,18 @@ def scan_disk(data_dir: Path, cc_sources: list[tuple[str, Path]]) -> list[FileSt
                     path=path, source=SOURCE_CC_TOOLS,
                     mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size, host=host,
                 ))
+
+    for host, codex_data_dir in (codex_sources or []):
+        # Codex's layout is sessions/YYYY/MM/DD/rollout-*.jsonl, so unlike CC
+        # there is no depth-based classification and no project-slug dir: match
+        # rollout files by name at any depth, all searchable (SOURCE_CODEX), and
+        # leave email empty (cwd from session_meta is the project identity).
+        for path, st, _depth in _walk_jsonl(codex_data_dir, _is_codex_rollout):
+            stats.append(FileStat(
+                path=path, source=SOURCE_CODEX,
+                mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns, size=st.st_size,
+                email="", host=host,
+            ))
 
     return stats
 
@@ -832,7 +891,8 @@ def _index_file(conn, fs: FileStat, extract_llm_texts, extract_llm_model) -> Opt
 def refresh(conn: sqlite3.Connection, data_dir: Path,
             cc_sources: list[tuple[str, Path]],
             extract_llm_texts: Callable[[dict, str, str], list],
-            extract_llm_model: Callable[[dict, str, str], str]) -> Optional[list]:
+            extract_llm_model: Callable[[dict, str, str], str],
+            codex_sources: list[tuple[str, Path]] | None = None) -> Optional[list]:
     """Bring the index up to date with the filesystem.
 
     Returns the (usually empty) list of file paths that could not be
@@ -857,7 +917,7 @@ def refresh(conn: sqlite3.Connection, data_dir: Path,
     lock = _refresh_lock(Path(raw_db_path)) if raw_db_path else nullcontext()
     try:
         with lock:
-            disk = scan_disk(data_dir, cc_sources)
+            disk = scan_disk(data_dir, cc_sources, codex_sources)
             plan = diff_index(disk, load_indexed_files(conn))
             if plan.is_noop():
                 return []
@@ -1006,13 +1066,28 @@ def browse_items(conn: sqlite3.Connection, source: str) -> Optional[list]:
     return [dict(zip(keys, row)) for row in rows]
 
 
-def tool_counts(conn: sqlite3.Connection) -> Optional[Counter]:
-    """Claude Code tool_use totals across the whole archive (for --stats).
-    None on db error — callers fall back to scanning the JSONL files."""
+def tool_counts(conn: sqlite3.Connection,
+                sources: Optional[list] = None) -> Optional[Counter]:
+    """Transcript tool_use totals across the archive (for --stats).
+
+    With `sources` given, only files of those sources are counted (e.g.
+    [SOURCE_CC, SOURCE_CC_TOOLS] for Claude Code only, or [SOURCE_CODEX] for
+    Codex only), keeping the index path's leaderboard scoped exactly like the
+    per-source scan fallback. None counts every source. None return on db error
+    — callers fall back to scanning the JSONL files."""
     try:
-        rows = conn.execute(
-            "SELECT tool, SUM(count) FROM cc_tool_counts GROUP BY tool"
-        ).fetchall()
+        if sources:
+            placeholders = ",".join("?" * len(sources))
+            rows = conn.execute(
+                f"SELECT c.tool, SUM(c.count) FROM cc_tool_counts c "
+                f"JOIN files f ON f.id = c.file_id "
+                f"WHERE f.source IN ({placeholders}) GROUP BY c.tool",
+                tuple(sources),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT tool, SUM(count) FROM cc_tool_counts GROUP BY tool"
+            ).fetchall()
     except sqlite3.Error:
         return None
     return Counter(dict(rows))

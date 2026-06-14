@@ -124,3 +124,62 @@ def test_cc_html_excludes_thinking_and_pins_iso_timestamp():
     assert "Let me explain virtual environments" not in page
     # TZ-independent created-at pin (raw ISO in the <time> datetime attribute).
     assert 'datetime="2026-04-10T14:00:00.000Z"' in page
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Codex session renderers (codex_to_markdown / codex_to_html), mirroring
+# the Claude Code renderer tests above.
+# ---------------------------------------------------------------------------
+
+CX_FIXTURE = Path(__file__).parent / "fixtures" / "sample_codex_session.jsonl"
+CX_SESSION = "b19ec125-978e-7f30-8b5b-61448a2fc5d7"
+CX_RESUME = f"cd /tmp/codex-resume-test && codex resume {CX_SESSION}"
+CX_TOOLS_FIXTURE = Path(__file__).parent / "fixtures" / "sample_codex_session_with_tools.jsonl"
+
+
+def test_codex_markdown_metadata_block():
+    md = vc.codex_to_markdown(CX_FIXTURE)
+    assert f"**Session:** `{CX_SESSION}`" in md
+    assert "**Directory:** `/tmp/codex-resume-test`" in md
+    # codex records no git branch; the Branch line is omitted (empty git_branch)
+    assert "**Branch:**" not in md
+
+
+def test_codex_markdown_resume_command():
+    md = vc.codex_to_markdown(CX_FIXTURE)
+    assert f"**Resume:** `{CX_RESUME}`" in md
+
+
+def test_codex_markdown_turns():
+    md = vc.codex_to_markdown(CX_FIXTURE)
+    assert "## User" in md
+    assert "## Assistant" in md
+    assert "PING" in md and "PONG" in md
+
+
+def test_codex_markdown_tools_and_excludes_reasoning():
+    md = vc.codex_to_markdown(CX_TOOLS_FIXTURE)
+    assert "*Tools used:" in md
+    assert "apply_patch" in md
+    # encrypted reasoning blobs must never surface in the rendered transcript
+    assert "encrypted" not in md.lower()
+
+
+def test_codex_html_page_shell_and_source_label():
+    page = vc.codex_to_html(CX_FIXTURE)
+    assert "OpenAI Codex" in page  # _SOURCE_LABELS["codex"]
+    assert ("<strong>Resume:</strong> <code>cd /tmp/codex-resume-test "
+            f"&amp;&amp; codex resume {CX_SESSION}</code>") in page
+
+
+def test_codex_html_turns():
+    page = vc.codex_to_html(CX_FIXTURE)
+    assert page.count('message-row user') == 2
+    assert page.count('message-row assistant') == 2
+
+
+def test_render_conversation_dispatches_codex():
+    md = vc.render_conversation("codex", CX_FIXTURE, "markdown")
+    assert f"**Session:** `{CX_SESSION}`" in md
+    html = vc.render_conversation("codex", CX_FIXTURE, "html")
+    assert "OpenAI Codex" in html

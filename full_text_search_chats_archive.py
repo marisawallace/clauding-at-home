@@ -22,11 +22,14 @@ from typing import List, Optional, Tuple
 
 import providers
 from paths import (
-    CLAUDE_CODE_HOST_ENV_KEY,
+    MACHINE_NAME_ENV_KEY,
     CLAUDE_CODE_SOURCES_ENV_KEY,
+    CODEX_SOURCES_ENV_KEY,
+    explicit_host_name,
     load_env_file,
     open_in_editor,
     parse_claude_code_sources,
+    parse_codex_sources,
     resolve_data_dir,
     resolve_env_path,
     resolve_local_views_dir,
@@ -40,7 +43,7 @@ from paths import (
 # with export_archive). "all" plus one token per searchable source family; a new
 # transcript source (e.g. codex) is added here and consumed everywhere choices
 # are offered. Distinct from a provider id: "llm" bundles claude + chatgpt.
-SOURCE_CHOICES = ["all", "llm", "claude-code"]
+SOURCE_CHOICES = ["all", "llm", "claude-code", "codex"]
 
 
 # ANSI color codes
@@ -592,7 +595,7 @@ def results_from_index_items(rows: List[dict], apply_recency_boost: bool = True)
     results: List[SearchResult] = []
     for row in rows:
         extra = None
-        if row["provider"] == "claude-code":
+        if providers.is_local_cli(row["provider"]):
             extra = {
                 "cwd": row["cwd"],
                 "git_branch": row["git_branch"],
@@ -694,7 +697,7 @@ def results_from_index_rows(
         total_score = sum(m.score for m in matches) + name_bonus(row["name_raw"], query, exact)
 
         extra = None
-        if row["provider"] == "claude-code":
+        if providers.is_local_cli(row["provider"]):
             host = host_for_path(row["path"], row["host"]) if host_for_path else row["host"]
             extra = {
                 "cwd": row["cwd"],
@@ -763,6 +766,85 @@ def search_cc_with_index(index_conn, cc_sources, query, exact, recency):
     return results
 
 
+def search_codex_archive(sources: List[Tuple[str, Path]], query: str, apply_recency_boost: bool = True, exact: bool = False, candidates: Optional[set] = None) -> List[SearchResult]:
+    """
+    Search OpenAI Codex rollout JSONL archives across one or more host-labeled
+    source directories.
+
+    Codex's on-disk layout is sessions/YYYY/MM/DD/rollout-*.jsonl with no
+    per-project directory (the project identity is the session cwd), so — unlike
+    search_claude_code_archive's iterdir+glob — we rglob the rollout files under
+    each source root. `candidates` narrows the walk to index-pre-matched files;
+    None scans everything.
+    """
+    import codex_parser as cxp
+
+    results: List[SearchResult] = []
+
+    for host, codex_data_dir in sources:
+        if not codex_data_dir.exists():
+            print(f"Warning: Codex data directory not found: {codex_data_dir} (host {host})", file=sys.stderr)
+            continue
+
+        for jsonl_file in codex_data_dir.rglob("rollout-*.jsonl"):
+            if candidates is not None and str(jsonl_file) not in candidates:
+                continue
+            try:
+                lines = cxp.parse_jsonl(jsonl_file)
+            except Exception as e:
+                print(f"Warning: Could not read {jsonl_file}: {e}", file=sys.stderr)
+                continue
+
+            texts = cxp.extract_searchable_text(lines)
+            matches = find_matches_in_texts(texts, query, exact=exact)
+            if not matches:
+                continue
+
+            metadata = cxp.extract_session_metadata(lines)
+            total_score = sum(m.score for m in matches) + name_bonus(metadata["name"], query, exact)
+
+            results.append(SearchResult(
+                type="conversation",
+                uuid=metadata["session_id"],
+                name=metadata["name"],
+                created_at=metadata["created_at"],
+                updated_at=metadata["updated_at"],
+                email="",  # codex carries no account/project-slug dir
+                provider="codex",
+                filepath=jsonl_file,
+                matches=matches,
+                total_score=total_score,
+                model=metadata.get("model", ""),
+                extra={
+                    "cwd": metadata["cwd"],
+                    "git_branch": metadata["git_branch"],
+                    "host": host,
+                },
+            ))
+
+    if apply_recency_boost:
+        for result in results:
+            result.total_score += recency_boost(result.updated_at)
+
+    results.sort(key=lambda r: -r.total_score)
+    return results
+
+
+def search_codex_with_index(index_conn, codex_sources, query, exact, recency):
+    """Codex query results via the index, with the same per-source and per-file
+    scan fallbacks as search_cc_with_index."""
+    import search_index
+    rows = _index_rows_for_query(index_conn, search_index.SOURCE_CODEX, query, exact)
+    if rows is None:
+        return search_codex_archive(codex_sources, query, apply_recency_boost=recency, exact=exact)
+    results, fallback = results_from_index_rows(rows, query, exact, recency,
+                                                host_for_path=make_host_resolver(codex_sources))
+    if fallback:
+        results += search_codex_archive(codex_sources, query, apply_recency_boost=recency,
+                                        exact=exact, candidates=fallback)
+    return results
+
+
 def unreadable_files_banner(paths: List[str]) -> str:
     """Loud stderr summary for archive files that could not be indexed.
 
@@ -798,13 +880,37 @@ def gather_cc_tool_counts(sources: List[Tuple[str, Path]]):
     return counts
 
 
-def filter_to_here(results: List[SearchResult], cwd: Path, host: str) -> List[SearchResult]:
-    """Keep only claude-code results on `host` whose session cwd is `cwd` or a subdir of it.
+def gather_codex_tool_counts(sources: List[Tuple[str, Path]]):
+    """Sum OpenAI Codex tool invocations across every rollout in the sources.
 
-    Filtering on the recorded session cwd (rather than reconstructing the Claude Code
-    project slug from a directory name) is robust to slug-encoding details. Note:
-    extract_session_metadata() records a single cwd per session (its first user line),
-    so a session that cd's into `cwd` mid-run will not match.
+    Imperative shell around the pure codex_parser helpers; the --stats scan
+    fallback for codex, mirroring gather_cc_tool_counts.
+    """
+    from collections import Counter
+    import codex_parser as cxp
+
+    counts: Counter = Counter()
+    for _host, codex_data_dir in sources:
+        if not codex_data_dir.exists():
+            continue
+        for jsonl_file in codex_data_dir.rglob("rollout-*.jsonl"):
+            try:
+                lines = cxp.parse_jsonl(jsonl_file)
+            except Exception as e:
+                print(f"Warning: Could not read {jsonl_file}: {e}", file=sys.stderr)
+                continue
+            counts.update(cxp.count_tool_uses(lines))
+    return counts
+
+
+def filter_to_here(results: List[SearchResult], cwd: Path, host: str) -> List[SearchResult]:
+    """Keep only local-CLI results (claude-code, codex) on `host` whose session
+    cwd is `cwd` or a subdir of it.
+
+    Filtering on the recorded session cwd (rather than reconstructing a project
+    slug from a directory name) is robust to slug-encoding details. Note:
+    extract_session_metadata() records a single cwd per session, so a session
+    that cd's into `cwd` mid-run will not match.
     """
     cwd = Path(cwd).resolve()
 
@@ -816,9 +922,9 @@ def filter_to_here(results: List[SearchResult], cwd: Path, host: str) -> List[Se
 
     return [
         r for r in results
-        if r.provider == "claude-code"
-        and r.extra.get("host") == host
-        and under(r.extra.get("cwd", ""))
+        if providers.is_local_cli(r.provider)
+        and (r.extra or {}).get("host") == host
+        and under((r.extra or {}).get("cwd", ""))
     ]
 
 
@@ -828,21 +934,21 @@ def here_miss_hint(
     """Build a dim, multi-line diagnostic explaining why --here matched nothing.
 
     Prints both sides of the host equality test plus the current directory so the
-    user can eyeball a mismatch. `pre_filter` is the claude-code result set before
+    user can eyeball a mismatch. `pre_filter` is the local-CLI result set before
     --here was applied (non-empty); call only when the post-filter set is empty.
 
     Two failure modes are distinguished:
       - host mismatch: this machine's host name isn't among the result hosts at all
-        (common when CLAUDE_CODE_HOST is unset and the hostname doesn't match the
+        (common when MACHINE_NAME is unset and the hostname doesn't match the
         label in CLAUDE_CODE_SOURCES).
       - directory miss: the host matches but no session was recorded under `cwd`.
     """
     hosts_present = sorted({(r.extra or {}).get("host", "") for r in pre_filter})
-    host_source = CLAUDE_CODE_HOST_ENV_KEY if host_is_explicit else "system hostname"
+    host_source = MACHINE_NAME_ENV_KEY if host_is_explicit else "system hostname"
     host_match = host in hosts_present
 
     lines = [
-        f"--here matched none of the {len(pre_filter)} Claude Code result(s) for this query.",
+        f"--here matched none of the {len(pre_filter)} local-CLI result(s) for this query.",
         f"  this host ({host_source}): {host!r}"
         + ("" if host_match else "   ← not among the result hosts below"),
         f"  hosts in results:  {', '.join(repr(h) for h in hosts_present)}",
@@ -888,11 +994,11 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False, 
             type_label = result.type.upper()
 
         print(f"{Colors.BOLD}{type_color}[{type_label}]{Colors.RESET} {Colors.BOLD}{result.name}{Colors.RESET}")
-        # Skip the UUID line for claude-code results: the UUID is already visible
-        # (and easy to copy) in the `claude -r <uuid>` resume command printed below.
-        if result.provider != "claude-code":
+        # Skip the UUID line for local-CLI results: the UUID is already visible
+        # (and easy to copy) in the `<cli> ... <uuid>` resume command printed below.
+        if not providers.is_local_cli(result.provider):
             print(f"{Colors.DIM}UUID: {result.uuid}{Colors.RESET}")
-        if result.provider == "claude-code":
+        if providers.is_local_cli(result.provider):
             extra = result.extra or {}
             cwd = extra.get("cwd", "~")
             host = extra.get("host", "")
@@ -901,7 +1007,7 @@ def print_results(results: List[SearchResult], query: str, exact: bool = False, 
             model_segment = f" | {model_label}" if model_label else ""
             print(f"{Colors.DIM}Created: {result.created_at[:10]} | Updated: {result.updated_at[:10]}{model_segment}{host_suffix}{Colors.RESET}")
             # Dim the resume command if the result is from a different host —
-            # `claude -r` won't find the session locally, so it's not actionable here.
+            # the resume CLI won't find the session locally, so it's not actionable here.
             resume_color = Colors.ORANGE
             if current_host and host and host != current_host:
                 resume_color = Colors.DIM
@@ -986,14 +1092,15 @@ def verify_diff(index_entries: List[dict], scan_entries: List[dict]) -> str:
     return "\n".join(lines)
 
 
-def gather_query_results(use_index, index_conn, data_dir, cc_sources, query, exact, source):
+def gather_query_results(use_index, index_conn, data_dir, cc_sources, query, exact, source,
+                         codex_sources=None):
     """Combined query results for the selected sources, recency boost disabled.
     use_index picks the index-backed rescore path or the full scan; --verify
     runs both and compares.
 
     Sources are table-driven so a new transcript source is one extra row: each
     entry is (-s token, index-backed gather, full-scan gather). A source whose
-    backing store is unconfigured (cc_sources empty) contributes no row.
+    backing store is unconfigured (empty sources list) contributes no row.
     """
     query_sources = [
         ("llm",
@@ -1005,6 +1112,11 @@ def gather_query_results(use_index, index_conn, data_dir, cc_sources, query, exa
             ("claude-code",
              lambda: search_cc_with_index(index_conn, cc_sources, query, exact, False),
              lambda: search_claude_code_archive(cc_sources, query, apply_recency_boost=False, exact=exact)))
+    if codex_sources:
+        query_sources.append(
+            ("codex",
+             lambda: search_codex_with_index(index_conn, codex_sources, query, exact, False),
+             lambda: search_codex_archive(codex_sources, query, apply_recency_boost=False, exact=exact)))
 
     results: List[SearchResult] = []
     for key, index_gather, scan_gather in query_sources:
@@ -1013,20 +1125,25 @@ def gather_query_results(use_index, index_conn, data_dir, cc_sources, query, exa
     return results
 
 
-def run_verify(index_conn, data_dir, cc_sources, query, exact, source) -> int:
+def run_verify(index_conn, data_dir, cc_sources, query, exact, source, codex_sources=None) -> int:
     """Run a query through both the index and scan pipelines and diff the
     canonicalized results. Returns a process exit code (0 = identical). This is
     the standing proof that the index is a pure accelerator, not a source of
     divergent answers."""
     import search_index
-    # Mirror the normal path: an explicit claude-code search with no sources
+    # Mirror the normal path: an explicit local-CLI search with no sources
     # configured is an error, not a vacuous "VERIFY OK (0 results)".
     if source == "claude-code" and not cc_sources:
         print(f"Error: {CLAUDE_CODE_SOURCES_ENV_KEY} not configured in .env", file=sys.stderr)
         return 1
+    if source == "codex" and not codex_sources:
+        print(f"Error: {CODEX_SOURCES_ENV_KEY} not configured in .env", file=sys.stderr)
+        return 1
     with search_index.read_snapshot(index_conn):
-        index_results = gather_query_results(True, index_conn, data_dir, cc_sources, query, exact, source)
-    scan_results = gather_query_results(False, None, data_dir, cc_sources, query, exact, source)
+        index_results = gather_query_results(True, index_conn, data_dir, cc_sources, query, exact, source,
+                                             codex_sources=codex_sources)
+    scan_results = gather_query_results(False, None, data_dir, cc_sources, query, exact, source,
+                                        codex_sources=codex_sources)
     index_entries = canonical_entries(index_results)
     scan_entries = canonical_entries(scan_results)
     if index_entries == scan_entries:
@@ -1049,7 +1166,7 @@ def open_results_in_editor(results: List[SearchResult], count: int, config: dict
     script_dir = Path(__file__).parent.resolve()
     sys.path.insert(0, str(script_dir))
     try:
-        from view_conversation import conversation_to_markdown, claude_code_to_markdown, get_output_path
+        from view_conversation import render_conversation, get_output_path
     except ImportError as e:
         print(f"Error: Could not import view_conversation: {e}", file=sys.stderr)
         sys.exit(1)
@@ -1070,14 +1187,11 @@ def open_results_in_editor(results: List[SearchResult], count: int, config: dict
             markdown_files.append(str(md_path))
             continue
 
-        # Load conversation data and convert to markdown
+        # Render to markdown via the shared per-provider dispatcher (handles
+        # claude-code/codex transcripts and web conversation/project JSON).
         try:
-            if result.provider == "claude-code":
-                markdown_content = claude_code_to_markdown(result.filepath)
-            else:
-                with open(result.filepath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                markdown_content = conversation_to_markdown(data)
+            markdown_content = render_conversation(
+                result.provider, result.filepath, "markdown", result.type)
 
             # Write markdown file
             with open(md_path, "w", encoding="utf-8") as f:
@@ -1113,8 +1227,9 @@ Examples:
   %(prog)s "deployment" -t
   %(prog)s "deployment" -R
   %(prog)s "archive" -s claude-code        # search only Claude Code sessions
-  %(prog)s "bugfix" --here                  # Claude Code sessions from this dir on this host
-  %(prog)s --here                           # this dir's Claude Code sessions, newest first
+  %(prog)s "archive" -s codex              # search only OpenAI Codex sessions
+  %(prog)s "bugfix" --here                  # local-CLI sessions from this dir on this host
+  %(prog)s --here                           # this dir's local-CLI sessions, newest first
         """
     )
 
@@ -1167,13 +1282,13 @@ Examples:
         "-s", "--source",
         choices=SOURCE_CHOICES,
         default="all",
-        help="Filter by source: all (default), llm (claude.ai/chatgpt), claude-code"
+        help="Filter by source: all (default), llm (claude.ai/chatgpt), claude-code, codex"
     )
 
     parser.add_argument(
         "--here",
         action="store_true",
-        help="Only Claude Code sessions run from the current directory (and subdirs) on this host"
+        help="Only local-CLI sessions (Claude Code, Codex) run from the current directory (and subdirs) on this host"
     )
 
     parser.add_argument(
@@ -1217,12 +1332,14 @@ Examples:
     query = (args.query or "").strip()
     no_query = not query
 
-    # --here implies the claude-code source and is incompatible with an explicit non-cc source.
-    if args.here:
-        if args.source == "llm":
-            print("Error: --here cannot be combined with -s llm", file=sys.stderr)
-            sys.exit(1)
-        args.source = "claude-code"
+    # --here scopes to local-CLI sessions (claude-code + codex) run from the
+    # current directory on this host. It is incompatible with the web-only llm
+    # source; otherwise it leaves args.source intact ("all" runs both local-CLI
+    # blocks, an explicit -s claude-code/codex narrows to one) and the per-block
+    # filter_to_here below does the directory/host scoping.
+    if args.here and args.source == "llm":
+        print("Error: --here cannot be combined with -s llm", file=sys.stderr)
+        sys.exit(1)
 
     # Get data directory
     script_dir = Path(__file__).parent.resolve()
@@ -1253,6 +1370,7 @@ Examples:
             failed_files = search_index.refresh(
                 index_conn, data_dir, parse_claude_code_sources(config), extract_llm_texts,
                 extract_llm_model,
+                codex_sources=parse_codex_sources(config),
             )
             if failed_files is None:
                 try:
@@ -1273,7 +1391,8 @@ Examples:
             print("Error: --verify requires a query.", file=sys.stderr)
             sys.exit(2)
         sys.exit(run_verify(index_conn, data_dir, parse_claude_code_sources(config),
-                            query, args.exact, args.source))
+                            query, args.exact, args.source,
+                            codex_sources=parse_codex_sources(config)))
 
     index_browse = index_conn is not None and no_query
     index_query = index_conn is not None and bool(query)
@@ -1289,7 +1408,8 @@ Examples:
     from contextlib import nullcontext
     snapshot = search_index.read_snapshot(index_conn) if index_conn is not None else nullcontext()
     with snapshot:
-        if args.source in ("all", "llm"):
+        # --here is web-incompatible, so skip the llm block when it is set.
+        if args.source in ("all", "llm") and not args.here:
             if index_browse:
                 rows = search_index.browse_items(index_conn, search_index.SOURCE_LLM)
                 if rows is not None:
@@ -1317,11 +1437,34 @@ Examples:
                     pre_filter = cc_results
                     cc_results = filter_to_here(pre_filter, Path.cwd(), current_host)
                     if pre_filter and not cc_results:
-                        host_is_explicit = bool(config.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip())
+                        host_is_explicit = bool(explicit_host_name(config))
                         print(here_miss_hint(pre_filter, Path.cwd(), current_host, host_is_explicit), file=sys.stderr)
                 results.extend(cc_results)
             elif args.source == "claude-code":
                 print(f"Error: {CLAUDE_CODE_SOURCES_ENV_KEY} not configured in .env", file=sys.stderr)
+                sys.exit(1)
+
+        if args.source in ("all", "codex"):
+            codex_sources = parse_codex_sources(config)
+            if codex_sources:
+                if index_browse:
+                    rows = search_index.browse_items(index_conn, search_index.SOURCE_CODEX)
+                    codex_results = (results_from_index_items(rows, apply_recency_boost=recency)
+                                     if rows is not None
+                                     else search_codex_archive(codex_sources, query, apply_recency_boost=recency, exact=args.exact))
+                elif index_query:
+                    codex_results = search_codex_with_index(index_conn, codex_sources, query, args.exact, recency)
+                else:
+                    codex_results = search_codex_archive(codex_sources, query, apply_recency_boost=recency, exact=args.exact)
+                if args.here:
+                    pre_filter = codex_results
+                    codex_results = filter_to_here(pre_filter, Path.cwd(), current_host)
+                    if pre_filter and not codex_results:
+                        host_is_explicit = bool(explicit_host_name(config))
+                        print(here_miss_hint(pre_filter, Path.cwd(), current_host, host_is_explicit), file=sys.stderr)
+                results.extend(codex_results)
+            elif args.source == "codex":
+                print(f"Error: {CODEX_SOURCES_ENV_KEY} not configured in .env", file=sys.stderr)
                 sys.exit(1)
 
     # Re-sort combined results by score
@@ -1342,11 +1485,26 @@ Examples:
     if args.stats:
         import analytics
         tool_counts = None
-        if args.source in ("all", "claude-code"):
+        want_cc = args.source in ("all", "claude-code")
+        want_codex = args.source in ("all", "codex")
+        if want_cc or want_codex:
+            # Scope the leaderboard to the requested local-CLI source(s) so the
+            # index path matches the per-source scan fallback exactly (the
+            # cc_tool_counts table now holds both cc and codex rows).
             if index_conn is not None:
-                tool_counts = search_index.tool_counts(index_conn)
+                import search_index
+                index_sources = []
+                if want_cc:
+                    index_sources += [search_index.SOURCE_CC, search_index.SOURCE_CC_TOOLS]
+                if want_codex:
+                    index_sources.append(search_index.SOURCE_CODEX)
+                tool_counts = search_index.tool_counts(index_conn, sources=index_sources)
             if tool_counts is None:
-                tool_counts = gather_cc_tool_counts(parse_claude_code_sources(config))
+                tool_counts = Counter()
+                if want_cc:
+                    tool_counts.update(gather_cc_tool_counts(parse_claude_code_sources(config)))
+                if want_codex:
+                    tool_counts.update(gather_codex_tool_counts(parse_codex_sources(config)))
         print(analytics.format_report(results, tool_counts=tool_counts))
         return
 

@@ -61,9 +61,30 @@ LOCAL_VIEWS_SUBDIR = DATA_ROOT / "local_views"
 # be attributed to the originating machine.
 CLAUDE_CODE_SOURCES_ENV_KEY = "CLAUDE_CODE_SOURCES"
 
-# Optional override for the human-readable name of this machine. If unset,
-# we normalize socket.gethostname() (lowercased, .local stripped).
+# External data sources for OpenAI Codex conversations (rollout JSONL archives).
+# Configured via CODEX_SOURCES in .env in the same comma-separated host=path
+# form as CLAUDE_CODE_SOURCES, e.g.
+# "laptop=/Users/me/cah/data/llm_data/codex/laptop". Each path is one machine's
+# Codex archive root, mirroring Codex's own sessions/YYYY/MM/DD/ date tree.
+CODEX_SOURCES_ENV_KEY = "CODEX_SOURCES"
+
+# Optional override for the human-readable name of this machine. If unset, we
+# normalize socket.gethostname() (lowercased, .local stripped). The host
+# identity is per-machine and shared by every provider — it tags which archive
+# subdir a machine writes to (claude-code/<host>/, codex/<host>/) and attributes
+# search results and --here to the originating box — so the key is deliberately
+# provider-neutral: MACHINE_NAME.
+MACHINE_NAME_ENV_KEY = "MACHINE_NAME"
+
+# Legacy name for MACHINE_NAME. Before Codex support the key was Claude-Code
+# specific (CLAUDE_CODE_HOST); once it came to govern every provider the name no
+# longer fit, so it was renamed. resolve_host_name still reads this as a
+# fallback, and migrations 002/004 rewrite an existing CLAUDE_CODE_HOST line to
+# MACHINE_NAME in place, so pre-rename .env files keep working untouched.
 CLAUDE_CODE_HOST_ENV_KEY = "CLAUDE_CODE_HOST"
+
+# Read precedence for the machine name: canonical key first, then legacy alias.
+_HOST_NAME_ENV_KEYS = (MACHINE_NAME_ENV_KEY, CLAUDE_CODE_HOST_ENV_KEY)
 
 
 def parse_env_assignment(line: str) -> tuple[str, str, bool] | None:
@@ -183,6 +204,23 @@ def set_env_value(text: str, key: str, value: str) -> str:
     return "\n".join(new_lines) + "\n"
 
 
+def remove_env_key(text: str, key: str) -> str:
+    """Pure: drop every *active* line assigning `key`, leaving the rest intact.
+
+    Commented-out lines (e.g. .env.example documentation) are preserved; only
+    active `key=...` assignments are removed. Used by the migrations to retire a
+    renamed key after writing its replacement, so a stale active assignment
+    can't shadow or contradict the new one. Returns "" if nothing is left.
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        parsed = parse_env_assignment(line)
+        if parsed is not None and parsed[0] == key and not parsed[2]:
+            continue
+        kept.append(line)
+    return "\n".join(kept) + "\n" if kept else ""
+
+
 def _resolve_dir(
     config: dict, env_key: str, script_dir: Path, default_subdir: Path
 ) -> Path:
@@ -282,11 +320,14 @@ def migrate_legacy_index_cache(config: dict) -> None:
     shutil.move(str(old_dir), str(new_dir))
 
 
-def parse_sources_string(raw: str) -> list[tuple[str, str]]:
+def parse_sources_string(
+    raw: str, env_key: str = CLAUDE_CODE_SOURCES_ENV_KEY
+) -> list[tuple[str, str]]:
     """Parse a 'host1=path1,host2=path2' string into [(host, path), ...].
 
     Returns raw strings without expanduser/Path conversion. Raises ValueError
-    on malformed entries.
+    on malformed entries; `env_key` names the offending var in the message
+    (CLAUDE_CODE_SOURCES or CODEX_SOURCES — both share this format).
     """
     raw = raw.strip()
     if not raw:
@@ -298,15 +339,14 @@ def parse_sources_string(raw: str) -> list[tuple[str, str]]:
             continue
         if "=" not in entry:
             raise ValueError(
-                f"{CLAUDE_CODE_SOURCES_ENV_KEY} entry {entry!r} is missing '=': "
-                f"expected 'host=path'"
+                f"{env_key} entry {entry!r} is missing '=': expected 'host=path'"
             )
         host, path = entry.split("=", 1)
         host = host.strip()
         path = path.strip()
         if not host or not path:
             raise ValueError(
-                f"{CLAUDE_CODE_SOURCES_ENV_KEY} entry {entry!r} has empty host or path"
+                f"{env_key} entry {entry!r} has empty host or path"
             )
         out.append((host, path))
     return out
@@ -318,7 +358,19 @@ def parse_claude_code_sources(config: dict) -> list[tuple[str, Path]]:
     Returns [] if the var is unset or empty.
     """
     raw = config.get(CLAUDE_CODE_SOURCES_ENV_KEY, "")
-    return [(h, Path(p).expanduser()) for h, p in parse_sources_string(raw)]
+    return [(h, Path(p).expanduser())
+            for h, p in parse_sources_string(raw, CLAUDE_CODE_SOURCES_ENV_KEY)]
+
+
+def parse_codex_sources(config: dict) -> list[tuple[str, Path]]:
+    """Return list of (host, expanded Path) tuples parsed from CODEX_SOURCES.
+
+    Same host=path format and semantics as parse_claude_code_sources; returns
+    [] if the var is unset or empty.
+    """
+    raw = config.get(CODEX_SOURCES_ENV_KEY, "")
+    return [(h, Path(p).expanduser())
+            for h, p in parse_sources_string(raw, CODEX_SOURCES_ENV_KEY)]
 
 
 def normalize_hostname(raw: str) -> str:
@@ -329,19 +381,31 @@ def normalize_hostname(raw: str) -> str:
     return name
 
 
+def explicit_host_name(config: dict) -> str:
+    """The user-configured machine name from `config`, or '' if none is set.
+
+    Reads MACHINE_NAME, falling back to the legacy CLAUDE_CODE_HOST key. Unlike
+    resolve_host_name it does not consult the OS hostname — callers that want
+    that default use resolve_host_name; callers that need to know whether the
+    user set a name at all (vs. inheriting gethostname) use this.
+    """
+    for key in _HOST_NAME_ENV_KEYS:
+        value = (config.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def resolve_host_name(config: dict) -> str:
     """Return the human-readable host name for this machine.
 
-    Reads CLAUDE_CODE_HOST from `config` if set; otherwise falls back to a
-    normalized socket.gethostname(). The explicit override exists because
-    macOS hostnames are unstable (network-dependent, can flip between
-    'machine.local' and 'machine-2.local'), so a hand-picked name is more
-    reliable for cross-machine search attribution.
+    Uses an explicit MACHINE_NAME (or the legacy CLAUDE_CODE_HOST) from `config`
+    if set; otherwise falls back to a normalized socket.gethostname(). The
+    explicit override exists because macOS hostnames are unstable
+    (network-dependent, can flip between 'machine.local' and 'machine-2.local'),
+    so a hand-picked name is more reliable for cross-machine search attribution.
     """
-    explicit = config.get(CLAUDE_CODE_HOST_ENV_KEY, "").strip()
-    if explicit:
-        return explicit
-    return normalize_hostname(socket.gethostname())
+    return explicit_host_name(config) or normalize_hostname(socket.gethostname())
 
 
 def _default_open_command(path: Path) -> list[str] | None:

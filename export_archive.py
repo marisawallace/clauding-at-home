@@ -32,12 +32,19 @@ from pathlib import Path
 from typing import List, Sequence, Tuple
 
 import providers
-from paths import load_env_file, parse_claude_code_sources, resolve_data_dir, resolve_env_path
+from paths import (
+    load_env_file,
+    parse_claude_code_sources,
+    parse_codex_sources,
+    resolve_data_dir,
+    resolve_env_path,
+)
 from full_text_search_chats_archive import (
     SOURCE_CHOICES,
     SearchResult,
     search_archive,
     search_claude_code_archive,
+    search_codex_archive,
 )
 from sync_local_chats_archive import build_filename
 from view_conversation import render_conversation
@@ -53,8 +60,9 @@ PROVIDER_LABELS = {pid: p.analytics_label for pid, p in providers.all_providers(
 # ---------------------------------------------------------------------------
 
 def export_group(result: SearchResult) -> str:
-    """Second path component: the account email, or the host for Claude Code."""
-    if result.provider == "claude-code":
+    """Second path component: the host for local-CLI providers (claude-code,
+    codex), else the account email."""
+    if providers.is_local_cli(result.provider):
         return (result.extra or {}).get("host") or "unknown-host"
     return result.email or "unknown"
 
@@ -131,6 +139,10 @@ def gather_results(config: dict, source: str) -> List[SearchResult]:
         sources = parse_claude_code_sources(config)
         if sources:
             results.extend(search_claude_code_archive(sources, "", apply_recency_boost=False))
+    if source in ("all", "codex"):
+        codex_sources = parse_codex_sources(config)
+        if codex_sources:
+            results.extend(search_codex_archive(codex_sources, "", apply_recency_boost=False))
     return results
 
 

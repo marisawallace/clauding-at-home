@@ -110,10 +110,10 @@ def provider_counts(results: Sequence["SearchResult"]) -> Counter:
 
 
 def host_counts(results: Sequence["SearchResult"]) -> Counter:
-    """Conversation counts per Claude Code host (other providers have no host)."""
+    """Conversation counts per local-CLI host (web providers have no host)."""
     return count_by(
         results,
-        lambda r: (r.extra or {}).get("host") if r.provider == "claude-code" else None,
+        lambda r: (r.extra or {}).get("host") if providers.is_local_cli(r.provider) else None,
     )
 
 
@@ -162,10 +162,10 @@ def weekday_histogram(results: Sequence["SearchResult"]) -> List[int]:
 
 
 def top_directories(results: Sequence["SearchResult"], n: int = 8) -> List[Tuple[str, int]]:
-    """Most frequent Claude Code session directories (home-abbreviated)."""
+    """Most frequent local-CLI session directories (home-abbreviated)."""
     counter = count_by(
         results,
-        lambda r: (r.extra or {}).get("cwd") if r.provider == "claude-code" else None,
+        lambda r: (r.extra or {}).get("cwd") if providers.is_local_cli(r.provider) else None,
     )
     return [(abbreviate_home(cwd), c) for cwd, c in counter.most_common(n)]
 
@@ -261,8 +261,8 @@ def format_report(
 ) -> str:
     """Render the full analytics report as a plain-text string (pure).
 
-    tool_counts, if given, adds a Claude Code tool-usage leaderboard (the shell
-    gathers it by parsing the JSONL transcripts).
+    tool_counts, if given, adds a local-CLI (Claude Code / Codex) tool-usage
+    leaderboard (the shell gathers it by parsing the JSONL transcripts).
     """
     rule = "─" * width
 
@@ -290,9 +290,9 @@ def format_report(
 
     hosts = host_counts(results)
     if hosts:
-        cc_total = sum(hosts.values())
-        lines.append("  Claude Code by host")
-        lines += _ranked_block(hosts, cc_total)
+        local_cli_total = sum(hosts.values())
+        lines.append("  Local-CLI sessions by host")
+        lines += _ranked_block(hosts, local_cli_total)
         lines.append("")
 
     lines.append("  Activity by month (most recent 12)")
@@ -309,7 +309,7 @@ def format_report(
 
     dirs = top_directories(results)
     if dirs:
-        lines.append("  Top Claude Code directories")
+        lines.append("  Top local-CLI directories")
         max_count = dirs[0][1]
         label_w = max(len(d) for d, _ in dirs)
         for d, c in dirs:
@@ -319,7 +319,7 @@ def format_report(
     if tool_counts:
         leaders = tool_leaderboard(tool_counts)
         total_calls = sum(tool_counts.values())
-        lines.append(f"  Claude Code tool usage ({total_calls:,} calls)")
+        lines.append(f"  Local-CLI tool usage ({total_calls:,} calls)")
         max_count = leaders[0][1]
         label_w = max(len(name) for name, _ in leaders)
         for name, count in leaders:

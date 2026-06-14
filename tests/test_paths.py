@@ -12,6 +12,27 @@ import paths
 SCRIPT_DIR = Path("/repo")
 
 
+def test_codex_sources_parsed_to_host_path_pairs():
+    config = {"CODEX_SOURCES": "laptop=/data/codex/laptop,desktop=~/codex/desktop"}
+    assert paths.parse_codex_sources(config) == [
+        ("laptop", Path("/data/codex/laptop")),
+        ("desktop", Path("~/codex/desktop").expanduser()),
+    ]
+
+
+def test_codex_sources_empty_when_unset():
+    assert paths.parse_codex_sources({}) == []
+    assert paths.parse_codex_sources({"CODEX_SOURCES": ""}) == []
+
+
+def test_codex_sources_malformed_entry_names_codex_key():
+    import pytest
+
+    with pytest.raises(ValueError) as exc:
+        paths.parse_codex_sources({"CODEX_SOURCES": "no-equals-sign"})
+    assert "CODEX_SOURCES" in str(exc.value)
+
+
 def test_llm_data_dir_is_honored():
     config = {"LLM_DATA_DIR": "/custom/llm_data"}
     assert paths.resolve_data_dir(SCRIPT_DIR, config) == Path("/custom/llm_data")
@@ -110,3 +131,53 @@ def test_resolve_env_path_explicit_config_is_used():
 
 def test_resolve_env_path_expands_user():
     assert paths.resolve_env_path(SCRIPT_DIR, "~/cfg/.env") == Path.home() / "cfg" / ".env"
+
+
+# --- machine name resolution (MACHINE_NAME, legacy CLAUDE_CODE_HOST) --------
+
+def test_explicit_host_name_prefers_machine_name():
+    assert paths.explicit_host_name({"MACHINE_NAME": "laptop"}) == "laptop"
+
+
+def test_explicit_host_name_falls_back_to_legacy_key():
+    assert paths.explicit_host_name({"CLAUDE_CODE_HOST": "legacybox"}) == "legacybox"
+
+
+def test_explicit_host_name_machine_name_wins_over_legacy():
+    config = {"MACHINE_NAME": "new", "CLAUDE_CODE_HOST": "old"}
+    assert paths.explicit_host_name(config) == "new"
+
+
+def test_explicit_host_name_empty_when_unset():
+    assert paths.explicit_host_name({}) == ""
+    assert paths.explicit_host_name({"MACHINE_NAME": "  "}) == ""
+
+
+def test_resolve_host_name_uses_explicit_machine_name():
+    assert paths.resolve_host_name({"MACHINE_NAME": "laptop"}) == "laptop"
+
+
+def test_resolve_host_name_falls_back_to_gethostname(monkeypatch):
+    monkeypatch.setattr(paths.socket, "gethostname", lambda: "Box.local")
+    assert paths.resolve_host_name({}) == "box"  # normalized: lowercased, .local stripped
+
+
+# --- remove_env_key ---------------------------------------------------------
+
+def test_remove_env_key_drops_active_assignment():
+    text = "A=1\nCLAUDE_CODE_HOST=box\nB=2\n"
+    assert paths.remove_env_key(text, "CLAUDE_CODE_HOST") == "A=1\nB=2\n"
+
+
+def test_remove_env_key_preserves_commented_lines():
+    text = "# CLAUDE_CODE_HOST=doc\nA=1\n"
+    assert paths.remove_env_key(text, "CLAUDE_CODE_HOST") == text
+
+
+def test_remove_env_key_absent_is_noop():
+    text = "A=1\nB=2\n"
+    assert paths.remove_env_key(text, "CLAUDE_CODE_HOST") == text
+
+
+def test_remove_env_key_empties_file_when_only_key():
+    assert paths.remove_env_key("CLAUDE_CODE_HOST=box\n", "CLAUDE_CODE_HOST") == ""

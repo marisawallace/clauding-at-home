@@ -10,22 +10,25 @@ Walks you through everything after `git clone` + `cd scrying-at-home`:
   4. Optionally add shell aliases to a dotfile of your choosing
   5. Verify $EDITOR is set (offer to add it if not)
   6. Run the Claude Code archival setup (migrations/002...)
+  7. Run the OpenAI Codex archival setup (migrations/004...)
 
 Conventions mirror migrations/002_setup_claude_code_archival.py: colored
 output, a "Planned changes" preview before writing, timestamped backups
 before editing any file (*.bak.YYYYMMDDTHHMMSSZ), and idempotent re-runs.
 
-This does NOT re-implement the Claude Code migration; it shells out to it.
+This does NOT re-implement the provider migrations; it shells out to them.
 
 Usage:
   python3 setup.py
   python3 setup.py --yes                 # take all defaults, non-interactive
   python3 setup.py --yes --claude-hooks  # also run step 6 (installs hooks
                                          # into ~/.claude/settings.json)
+  python3 setup.py --yes --codex-hooks   # also run step 7 (installs a hook
+                                         # into ~/.codex/hooks.json)
 
-Step 6 installs Stop/SessionEnd hooks into ~/.claude/settings.json — code
-that runs on every Claude Code session. It is never run non-interactively
-unless --claude-hooks is passed alongside --yes.
+Steps 6 and 7 install hooks that run on every Claude Code / Codex session.
+They are never run non-interactively unless --claude-hooks / --codex-hooks
+is passed alongside --yes.
 """
 
 from __future__ import annotations
@@ -662,6 +665,40 @@ def step_claude_code_migration(
     return True
 
 
+def step_codex_migration(
+    repo_root: Path, yes: bool, codex_hooks: bool, search_alias: str | None = None
+) -> bool:
+    """Returns False only when the migration ran and failed."""
+    print(f"\n{BOLD}7. OpenAI Codex archival setup{RESET}")
+    migration = repo_root / "migrations" / "004_setup_codex_archival.py"
+    if not migration.exists():
+        print(f"  {YELLOW}!{RESET} {migration} not found — skip.")
+        return True
+    if yes and not codex_hooks:
+        # This step installs a Stop hook into ~/.codex/hooks.json (code that runs
+        # on every Codex turn) — too consequential for a blanket --yes. Require
+        # the explicit flag, mirroring --claude-hooks.
+        print(f"  {DIM}Skipped: --yes alone never installs Codex hooks.{RESET}")
+        print(f"  {DIM}Re-run with --yes --codex-hooks, or run it interactively:{RESET}")
+        print(f"    python3 {migration}")
+        return True
+    if not (yes or _prompt_yn("  Run Codex archival setup now?", default=True)):
+        print(f"  {DIM}Skipped. Run it later with:{RESET}")
+        print(f"    python3 {migration}")
+        return True
+    cmd = [sys.executable, str(migration)]
+    if yes:
+        cmd.append("--yes")
+    if search_alias:
+        cmd += ["--search-alias", search_alias]
+    print(f"  {DIM}Running: {' '.join(cmd)}{RESET}\n")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(f"  {RED}✗ Codex archival setup exited with status {result.returncode}.{RESET}")
+        return False
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Interactive post-clone setup for scrying-at-home",
@@ -677,6 +714,11 @@ def main() -> None:
         "--claude-hooks", action="store_true",
         help="With --yes: also run the Claude Code archival setup, which "
              "installs Stop/SessionEnd hooks into ~/.claude/settings.json",
+    )
+    parser.add_argument(
+        "--codex-hooks", action="store_true",
+        help="With --yes: also run the Codex archival setup, which installs a "
+             "Stop hook into ~/.codex/hooks.json",
     )
     args = parser.parse_args()
 
@@ -694,15 +736,24 @@ def main() -> None:
     step_zip_search_dir(env_path, args.yes)
     aliases, alias_dotfiles = step_aliases(repo_root, args.yes)
     step_editor(args.yes)
-    migration_ok = step_claude_code_migration(
+    cc_migration_ok = step_claude_code_migration(
         repo_root, args.yes, args.claude_hooks, aliases.get("search")
     )
+    codex_migration_ok = step_codex_migration(
+        repo_root, args.yes, args.codex_hooks, aliases.get("search")
+    )
+    migration_ok = cc_migration_ok and codex_migration_ok
 
     print(f"\n{BOLD}{'=' * 60}{RESET}")
     if migration_ok:
         print(f"{GREEN}{BOLD}  Setup complete!{RESET}")
     else:
-        print(f"{RED}{BOLD}  Setup finished, but step 6 failed (see above).{RESET}")
+        failed = []
+        if not cc_migration_ok:
+            failed.append("6 (Claude Code)")
+        if not codex_migration_ok:
+            failed.append("7 (Codex)")
+        print(f"{RED}{BOLD}  Setup finished, but step {', '.join(failed)} failed (see above).{RESET}")
     print(f"{BOLD}{'=' * 60}{RESET}")
 
     # Show the user's own aliases when we know them — ones we just wrote
